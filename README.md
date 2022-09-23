@@ -1,0 +1,1 @@
+This is an app for simulating logic gates and/or electricy (kinda). The app is coded in rust using the [egui framework](https://crates.io/crates/eframe) library. A built binary is at `/logic-sim-gui`.

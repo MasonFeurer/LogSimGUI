@@ -1,0 +1,8 @@
+[package]
+name = "logic-sim-gui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.19.0"
+fastrand = "1.8.0"
