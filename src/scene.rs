@@ -245,7 +245,7 @@ impl Scene {
     pub fn write(&mut self, target: WriteTarget, state: bool) {
         match target {
             WriteTarget::DeviceInput(device, input) => {
-                let device = self.devices.get_mut(&device).unwrap();
+                let Some(device) = self.devices.get_mut(&device) else { return };
                 let mut changed_outputs = Vec::new();
 
                 device.data.set_input(input, state, &mut changed_outputs);
@@ -262,7 +262,8 @@ impl Scene {
                 }
             }
             WriteTarget::SceneOutput(output) => {
-                self.outputs.get_mut(&output).unwrap().state = state;
+                let Some(output) = self.outputs.get_mut(&output) else { return };
+                output.state = state;
             }
         }
     }
@@ -293,7 +294,7 @@ impl Scene {
     }
 
     pub fn set_input(&mut self, input: SimId, state: bool) {
-        let input = self.inputs.get_mut(&input).unwrap();
+        let Some(input) = self.inputs.get_mut(&input) else { return };
         if input.state == state {
             return;
         }
@@ -303,7 +304,7 @@ impl Scene {
         }
     }
     pub fn set_device_input(&mut self, device: SimId, input: usize, state: bool) {
-        let device = self.devices.get_mut(&device).unwrap();
+        let Some(device) = self.devices.get_mut(&device) else { return };
         if device.data.get_input(input) == state {
             return;
         }

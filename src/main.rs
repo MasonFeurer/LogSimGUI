@@ -197,7 +197,7 @@ impl eframe::App for App {
                     }
 
                     let io_size = Vec2::new(20.0, 5.0);
-                    for (id, device) in &mut self.scene.devices {
+                    for (_id, device) in &mut self.scene.devices {
                         let device_preset = self.presets.get(&device.preset).unwrap();
                         let (width, height) = device_preset.size();
 
