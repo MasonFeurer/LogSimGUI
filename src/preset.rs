@@ -1,75 +1,74 @@
-use crate::graphics;
-use crate::sim::{self, BitField};
-use eframe::egui::{Pos2, Vec2};
+pub mod chip;
 
-#[derive(Clone, Debug)]
-pub enum DeviceData {
+use crate::{BitField, TruthTable};
+use eframe::egui::Color32;
+
+#[derive(Default, Clone, Debug)]
+pub struct IoLabel {
+    pub name: String,
+    pub implicit: bool,
+}
+impl IoLabel {
+    #[inline(always)]
+    pub fn implicit_input() -> Self {
+        Self {
+            name: String::from("input"),
+            implicit: true,
+        }
+    }
+    #[inline(always)]
+    pub fn implicit_output() -> Self {
+        Self {
+            name: String::from("output"),
+            implicit: true,
+        }
+    }
+
+    #[inline(always)]
+    pub fn implicit(name: &str) -> Self {
+        Self {
+            name: String::from(name),
+            implicit: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CombGate {
+    pub name: String,
+    pub color: Color32,
+    pub inputs: Vec<IoLabel>,
+    pub outputs: Vec<IoLabel>,
+    pub table: TruthTable,
+}
+impl CombGate {
+    #[inline(always)]
+    pub fn num_inputs(&self) -> usize {
+        self.table.num_inputs
+    }
+    #[inline(always)]
+    pub fn num_outputs(&self) -> usize {
+        self.table.num_outputs
+    }
+
+    #[inline(always)]
+    pub fn get_input(&self, input: usize) -> &IoLabel {
+        &self.inputs[input]
+    }
+    #[inline(always)]
+    pub fn get_output(&self, output: usize) -> &IoLabel {
+        &self.outputs[output]
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Device {
     CombGate(CombGate),
-    Board(Board),
+    Chip(chip::Chip),
     Light,
     Switch,
 }
-impl DeviceData {
-    pub fn sim(&self) -> sim::Device {
-        match self {
-            Self::CombGate(comb_gate) => sim::Device::CombGate {
-                input: BitField(0),
-                output: comb_gate.table[0],
-                comb_gate: comb_gate.clone(),
-            },
-            Self::Board(board) => sim::Device::Board(board.sim()),
-            Self::Light => sim::Device::Light(false),
-            Self::Switch => sim::Device::Switch(false),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Device {
-    pub name: String,
-    pub color: [f32; 3],
-    pub data: DeviceData,
-}
 impl Device {
-    pub fn num_inputs(&self) -> usize {
-        match &self.data {
-            DeviceData::CombGate(comb_gate) => comb_gate.inputs.len(),
-            DeviceData::Board(board) => board.inputs.len(),
-            DeviceData::Light => 1,
-            DeviceData::Switch => 0,
-        }
-    }
-    pub fn num_outputs(&self) -> usize {
-        match &self.data {
-            DeviceData::CombGate(comb_gate) => comb_gate.outputs.len(),
-            DeviceData::Board(board) => board.outputs.len(),
-            DeviceData::Light => 0,
-            DeviceData::Switch => 1,
-        }
-    }
-    pub fn get_input_label(&self, input: usize) -> Option<IoLabel> {
-        match &self.data {
-            DeviceData::CombGate(comb_gate) => Some(comb_gate.inputs[input].clone()),
-            DeviceData::Board(board) => Some(board.inputs[input].label.clone()),
-            DeviceData::Light => {
-                assert_eq!(input, 0);
-                None
-            }
-            DeviceData::Switch => panic!("a button doesn't have an input"),
-        }
-    }
-    pub fn get_output_label(&self, output: usize) -> Option<IoLabel> {
-        match &self.data {
-            DeviceData::CombGate(comb_gate) => Some(comb_gate.outputs[output].clone()),
-            DeviceData::Board(board) => Some(board.outputs[output].label.clone()),
-            DeviceData::Light => panic!("a button doesn't have an output"),
-            DeviceData::Switch => {
-                assert_eq!(output, 0);
-                None
-            }
-        }
-    }
-
     pub fn size(&self) -> (f32, f32) {
         const PORT_SIZE: f32 = 20.0;
         const PORT_SPACE: f32 = 5.0;
@@ -82,227 +81,96 @@ impl Device {
         (width, height)
     }
 
-    #[inline(always)]
-    pub fn sim(&self) -> crate::sim::Device {
-        self.data.sim()
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct IoLabel {
-    pub name: String,
-    pub implicit: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct CombGate {
-    pub name: String,
-    pub inputs: Vec<IoLabel>,
-    pub outputs: Vec<IoLabel>,
-    pub table: Vec<BitField>,
-}
-impl CombGate {
-    pub fn get(&self, input: u64) -> BitField {
-        self.table[input as usize]
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct BoardInput {
-    pub label: IoLabel,
-    pub links: Vec<sim::BoardWriteTarget>,
-}
-impl BoardInput {
-    pub fn sim(&self) -> sim::BoardInput {
-        sim::BoardInput {
-            state: false,
-            links: self.links.clone(),
+    pub fn num_inputs(&self) -> usize {
+        match self {
+            Self::CombGate(e) => e.num_inputs(),
+            Self::Chip(e) => e.inputs.len(),
+            Self::Light => 1,
+            Self::Switch => 0,
         }
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct BoardOutput {
-    pub label: IoLabel,
-}
-impl BoardOutput {
-    pub fn sim(&self) -> sim::BoardOutput {
-        sim::BoardOutput { state: false }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct BoardDevice {
-    pub device: Device,
-    pub pos: Pos2,
-    pub links: Vec<Vec<sim::BoardLink>>,
-    pub input_locs: Vec<Pos2>,
-    pub output_locs: Vec<Pos2>,
-}
-impl BoardDevice {
-    pub fn sim(&self) -> sim::BoardDevice {
-        sim::BoardDevice {
-            device: self.device.sim(),
-            links: self.links.clone(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Board {
-    pub inputs: Vec<BoardInput>,
-    pub outputs: Vec<BoardOutput>,
-    pub devices: Vec<BoardDevice>,
-}
-impl Board {
-    pub fn new() -> Self {
-        Self {
-            inputs: Vec::new(),
-            outputs: Vec::new(),
-            devices: Vec::new(),
+    pub fn num_outputs(&self) -> usize {
+        match self {
+            Self::CombGate(e) => e.num_outputs(),
+            Self::Chip(e) => e.outputs.len(),
+            Self::Light => 0,
+            Self::Switch => 1,
         }
     }
 
-    pub fn sim(&self) -> sim::Board {
-        sim::Board {
-            inputs: self.inputs.iter().map(BoardInput::sim).collect(),
-            outputs: self.outputs.iter().map(BoardOutput::sim).collect(),
-            devices: self.devices.iter().map(BoardDevice::sim).collect(),
-            writes: Vec::new(),
-        }
-    }
-
-    pub fn get_target_loc(&self, target: sim::BoardWriteTarget) -> Pos2 {
-        match target {
-            sim::BoardWriteTarget::BoardOutput(output) => {
-                use graphics::{EDITOR_IO_SIZE, EDITOR_IO_SP, EDITOR_POS, EDITOR_SIZE};
-
-                let output_locs = graphics::calc_io_unsized_locs(
-                    EDITOR_POS + Vec2::new(EDITOR_SIZE.x - EDITOR_IO_SIZE.x, 0.0),
-                    self.outputs.len(),
-                    EDITOR_IO_SP,
-                );
-                output_locs[output]
+    pub fn get_input(&self, input: usize) -> IoLabel {
+        match self {
+            Self::CombGate(e) => e.get_input(input).clone(),
+            Self::Chip(e) => e.inputs[input].label.clone(),
+            Self::Light => {
+                assert_eq!(input, 0);
+                IoLabel::implicit_input()
             }
-            sim::BoardWriteTarget::DeviceInput(device, input) => {
-                self.devices[device].input_locs[input]
+            Self::Switch => panic!("a switch doesnt have an input"),
+        }
+    }
+    pub fn get_output(&self, output: usize) -> IoLabel {
+        match self {
+            Self::CombGate(e) => e.get_output(output).clone(),
+            Self::Chip(e) => e.outputs[output].label.clone(),
+            Self::Switch => {
+                assert_eq!(output, 0);
+                IoLabel::implicit_output()
             }
+            Self::Light => panic!("a switch doesnt have an output"),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::CombGate(e) => &e.name,
+            Self::Chip(e) => &e.name,
+            Self::Light => "light",
+            Self::Switch => "switch",
+        }
+    }
+
+    pub fn color(&self) -> Option<Color32> {
+        match self {
+            Self::CombGate(e) => Some(e.color.clone()),
+            Self::Chip(e) => Some(e.color.clone()),
+            Self::Light => None,
+            Self::Switch => None,
         }
     }
 }
 
-// **** DEFAULTS ****
-pub fn default_presets() -> [Device; 6] {
+pub fn default_presets() -> [Device; 2] {
     [
-        Device {
-            name: "Light".to_owned(),
-            color: [1.0, 1.0, 0.0],
-            data: DeviceData::Light,
-        },
-        Device {
-            name: "Switch".to_owned(),
-            color: [1.0, 1.0, 0.0],
-            data: DeviceData::Switch,
-        },
-        Device {
-            name: "And".to_owned(),
-            color: [0.0, 0.0, 1.0],
-            data: DeviceData::CombGate(CombGate {
-                name: "And".to_owned(),
-                inputs: vec![
-                    IoLabel {
-                        name: "a".to_owned(),
-                        implicit: true,
-                    },
-                    IoLabel {
-                        name: "b".to_owned(),
-                        implicit: true,
-                    },
-                ],
-                outputs: vec![IoLabel {
-                    name: "out".to_owned(),
-                    implicit: true,
-                }],
-                table: vec![
+        Device::CombGate(CombGate {
+            name: String::from("And"),
+            color: Color32::BLUE,
+            inputs: vec![IoLabel::implicit("a"), IoLabel::implicit("b")],
+            outputs: vec![IoLabel::implicit_output()],
+            table: TruthTable {
+                num_inputs: 2,
+                num_outputs: 1,
+                map: vec![
                     BitField(0), // 00
                     BitField(0), // 01
                     BitField(0), // 10
                     BitField(1), // 11
                 ],
-            }),
-        },
-        Device {
-            name: "Not".to_owned(),
-            color: [0.0, 1.0, 0.0],
-            data: DeviceData::CombGate(CombGate {
-                name: "Not".to_owned(),
-                inputs: vec![IoLabel {
-                    name: "in".to_owned(),
-                    implicit: true,
-                }],
-                outputs: vec![IoLabel {
-                    name: "out".to_owned(),
-                    implicit: true,
-                }],
-                table: vec![
+            },
+        }),
+        Device::CombGate(CombGate {
+            name: String::from("Not"),
+            color: Color32::GREEN,
+            inputs: vec![IoLabel::implicit_input()],
+            outputs: vec![IoLabel::implicit_output()],
+            table: TruthTable {
+                num_inputs: 1,
+                num_outputs: 1,
+                map: vec![
                     BitField(1), // 0
                     BitField(0), // 1
                 ],
-            }),
-        },
-        Device {
-            name: "Nor".to_owned(),
-            color: [1.0, 1.0, 0.0],
-            data: DeviceData::CombGate(CombGate {
-                name: "Nor".to_owned(),
-                inputs: vec![
-                    IoLabel {
-                        name: "a".to_owned(),
-                        implicit: true,
-                    },
-                    IoLabel {
-                        name: "b".to_owned(),
-                        implicit: true,
-                    },
-                ],
-                outputs: vec![IoLabel {
-                    name: "out".to_owned(),
-                    implicit: true,
-                }],
-                table: vec![
-                    BitField(1), // 00
-                    BitField(0), // 01
-                    BitField(0), // 10
-                    BitField(0), // 11
-                ],
-            }),
-        },
-        Device {
-            name: "Or".to_owned(),
-            color: [1.0, 0.0, 0.0],
-            data: DeviceData::CombGate(CombGate {
-                name: "Or".to_owned(),
-                inputs: vec![
-                    IoLabel {
-                        name: "a".to_owned(),
-                        implicit: true,
-                    },
-                    IoLabel {
-                        name: "b".to_owned(),
-                        implicit: true,
-                    },
-                ],
-                outputs: vec![IoLabel {
-                    name: "out".to_owned(),
-                    implicit: true,
-                }],
-                table: vec![
-                    BitField(0), // 00
-                    BitField(1), // 01
-                    BitField(1), // 10
-                    BitField(1), // 11
-                ],
-            }),
-        },
+            },
+        }),
     ]
 }
