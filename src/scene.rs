@@ -242,6 +242,32 @@ impl Scene {
         }
     }
 
+    pub fn get_link_start_loc(
+        &self,
+        ctx: &crate::graphics::Context,
+        link_start: LinkStart,
+    ) -> Option<Pos2> {
+        match link_start {
+            LinkStart::DeviceOutput(device, output) => {
+                Some(self.devices.get(&device)?.output_locs[output])
+            }
+            LinkStart::SceneInput(input) => {
+                use crate::graphics::{calc_io_unsized_locs, EDITOR_IO_SIZE, EDITOR_IO_SP};
+
+                let input = self.inputs.iter().position(|(key, _)| *key == input)?;
+                let input_locs = calc_io_unsized_locs(
+                    Pos2::new(
+                        ctx.canvas_rect.min.x + EDITOR_IO_SIZE.x,
+                        ctx.canvas_rect.min.y,
+                    ),
+                    self.inputs.len(),
+                    EDITOR_IO_SP,
+                );
+                Some(input_locs[input])
+            }
+        }
+    }
+
     pub fn write(&mut self, target: WriteTarget, state: bool) {
         match target {
             WriteTarget::DeviceInput(device, input) => {
@@ -366,7 +392,6 @@ impl Scene {
     }
 
     pub fn add_link(&mut self, start: LinkStart, link: WriteTarget) {
-        println!("linked from {start:?} to {link:?}");
         match start {
             LinkStart::SceneInput(input) => {
                 let input = self.inputs.get_mut(&input).unwrap();

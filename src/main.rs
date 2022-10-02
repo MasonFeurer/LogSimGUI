@@ -153,8 +153,13 @@ impl eframe::App for App {
                     self.scene = scene::Scene::new();
                 }
 
-                if ui.button("debug").clicked() {
+                if ui.button("debug scene").clicked() {
                     println!("scene: {:#?}\n", self.scene);
+                }
+                if ui.button("debug presets").clicked() {
+                    for (id, preset) in &self.presets {
+                        println!("preset {:?}: {:#?}\n", id, preset);
+                    }
                 }
             });
         });
@@ -256,7 +261,6 @@ impl eframe::App for App {
                                 self.scene.set_input(id, !state);
                             } else if int.secondary_clicked {
                                 self.link_start = Some(scene::LinkStart::SceneInput(id));
-                                println!("started link: {:?}", self.link_start);
                             }
                             if int.hovered && pressed_del {
                                 self.scene.inputs.remove(&id);
@@ -296,8 +300,27 @@ impl eframe::App for App {
                             if int.clicked {
                                 self.link_start =
                                     Some(scene::LinkStart::DeviceOutput(device, output));
-                                println!("started link: {:?}", self.link_start);
                             }
+                        }
+                    }
+
+                    if let Some(link_start) = &self.link_start {
+                        // TODO remove unwraps
+                        if let Some(from) = self.scene.get_link_start_loc(&ctx, link_start.clone())
+                        {
+                            let state = match link_start {
+                                scene::LinkStart::SceneInput(input) => self.scene.get_input(*input),
+                                scene::LinkStart::DeviceOutput(device, output) => {
+                                    self.scene.get_device_output(*device, *output)
+                                }
+                            };
+                            graphics::show_link(&mut ctx, state, from, pointer_pos);
+                        } else {
+                            self.link_start = None;
+                        };
+
+                        if pressed_del {
+                            self.link_start = None;
                         }
                     }
 
