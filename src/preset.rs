@@ -41,34 +41,40 @@ pub struct CombGate {
     pub outputs: Vec<IoLabel>,
     pub table: TruthTable,
 }
-impl CombGate {
+impl<'a> crate::IoAccess<()> for CombGate {
     #[inline(always)]
-    pub fn num_inputs(&self) -> usize {
+    fn num_inputs(&self) -> usize {
         self.table.num_inputs
     }
     #[inline(always)]
-    pub fn num_outputs(&self) -> usize {
+    fn num_outputs(&self) -> usize {
         self.table.num_outputs
     }
 
     #[inline(always)]
-    pub fn get_input(&self, input: usize) -> &IoLabel {
+    fn get_input(&self, input: usize) -> () {
+        assert!(input < self.inputs.len());
+        ()
+    }
+    #[inline(always)]
+    fn get_output(&self, output: usize) -> () {
+        assert!(output < self.outputs.len());
+        ()
+    }
+}
+impl CombGate {
+    #[inline(always)]
+    pub fn get_input_label(&self, input: usize) -> &IoLabel {
         &self.inputs[input]
     }
     #[inline(always)]
-    pub fn get_output(&self, output: usize) -> &IoLabel {
+    pub fn get_output_label(&self, output: usize) -> &IoLabel {
         &self.outputs[output]
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum Device {
-    CombGate(CombGate),
-    Chip(chip::Chip),
-    Light,
-    Switch,
-}
-impl Device {
+pub type DeviceData = crate::DeviceData<(), chip::Chip, CombGate>;
+impl DeviceData {
     pub fn size(&self) -> (f32, f32) {
         const PORT_SIZE: f32 = 20.0;
         const PORT_SPACE: f32 = 5.0;
@@ -81,52 +87,12 @@ impl Device {
         (width, height)
     }
 
-    pub fn num_inputs(&self) -> usize {
-        match self {
-            Self::CombGate(e) => e.num_inputs(),
-            Self::Chip(e) => e.inputs.len(),
-            Self::Light => 1,
-            Self::Switch => 0,
-        }
-    }
-    pub fn num_outputs(&self) -> usize {
-        match self {
-            Self::CombGate(e) => e.num_outputs(),
-            Self::Chip(e) => e.outputs.len(),
-            Self::Light => 0,
-            Self::Switch => 1,
-        }
-    }
-
-    pub fn get_input(&self, input: usize) -> IoLabel {
-        match self {
-            Self::CombGate(e) => e.get_input(input).clone(),
-            Self::Chip(e) => e.inputs[input].label.clone(),
-            Self::Light => {
-                assert_eq!(input, 0);
-                IoLabel::implicit_input()
-            }
-            Self::Switch => panic!("a switch doesnt have an input"),
-        }
-    }
-    pub fn get_output(&self, output: usize) -> IoLabel {
-        match self {
-            Self::CombGate(e) => e.get_output(output).clone(),
-            Self::Chip(e) => e.outputs[output].label.clone(),
-            Self::Switch => {
-                assert_eq!(output, 0);
-                IoLabel::implicit_output()
-            }
-            Self::Light => panic!("a switch doesnt have an output"),
-        }
-    }
-
     pub fn name(&self) -> &str {
         match self {
             Self::CombGate(e) => &e.name,
             Self::Chip(e) => &e.name,
-            Self::Light => "light",
-            Self::Switch => "switch",
+            Self::Light(_) => "light",
+            Self::Switch(_) => "switch",
         }
     }
 
@@ -134,15 +100,39 @@ impl Device {
         match self {
             Self::CombGate(e) => Some(e.color.clone()),
             Self::Chip(e) => Some(e.color.clone()),
-            Self::Light => None,
-            Self::Switch => None,
+            Self::Light(_) => None,
+            Self::Switch(_) => None,
+        }
+    }
+}
+impl DeviceData {
+    pub fn get_input_label(&self, input: usize) -> IoLabel {
+        match self {
+            Self::CombGate(e) => e.get_input_label(input).clone(),
+            Self::Chip(e) => e.inputs[input].label.clone(),
+            Self::Light(_) => {
+                assert_eq!(input, 0);
+                IoLabel::implicit_input()
+            }
+            Self::Switch(_) => panic!("a switch doesnt have an input"),
+        }
+    }
+    pub fn get_output_label(&self, output: usize) -> IoLabel {
+        match self {
+            Self::CombGate(e) => e.get_output_label(output).clone(),
+            Self::Chip(e) => e.outputs[output].label.clone(),
+            Self::Switch(_) => {
+                assert_eq!(output, 0);
+                IoLabel::implicit_output()
+            }
+            Self::Light(_) => panic!("a light doesnt have an output"),
         }
     }
 }
 
-pub fn default_presets() -> [Device; 2] {
+pub fn default_presets() -> [DeviceData; 2] {
     [
-        Device::CombGate(CombGate {
+        DeviceData::CombGate(CombGate {
             name: String::from("And"),
             color: Color32::BLUE,
             inputs: vec![IoLabel::implicit("a"), IoLabel::implicit("b")],
@@ -158,7 +148,7 @@ pub fn default_presets() -> [Device; 2] {
                 ],
             },
         }),
-        Device::CombGate(CombGate {
+        DeviceData::CombGate(CombGate {
             name: String::from("Not"),
             color: Color32::GREEN,
             inputs: vec![IoLabel::implicit_input()],

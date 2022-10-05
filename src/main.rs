@@ -1,15 +1,20 @@
-// TODO impl create()
+#![feature(never_type)]
+#![feature(exhaustive_patterns)]
+
 // TODO allow for changing IoLabel's in scene inputs/outputs
 //  a button to the left, that opens a menu that allows for such edits
 
 // TODO creating ID's for presets should be based off of time, so that they are stored in order of time created
 
+pub mod debug;
 pub mod graphics;
 pub mod preset;
 pub mod scene;
 
+use debug::good_debug;
 use eframe::egui::*;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -57,7 +62,90 @@ impl TruthTable {
     }
 }
 
-pub type Presets = HashMap<SimId, preset::Device>;
+pub trait IoAccess<T> {
+    fn get_input(&self, input: usize) -> T;
+    fn get_output(&self, output: usize) -> T;
+
+    fn num_inputs(&self) -> usize;
+    fn num_outputs(&self) -> usize;
+}
+impl<T> IoAccess<T> for ! {
+    fn get_input(&self, _input: usize) -> T {
+        unreachable!()
+    }
+    fn get_output(&self, _output: usize) -> T {
+        unreachable!()
+    }
+
+    fn num_inputs(&self) -> usize {
+        unreachable!()
+    }
+    fn num_outputs(&self) -> usize {
+        unreachable!()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum LinkTarget<T> {
+    DeviceInput(T, usize),
+    Output(T),
+}
+#[derive(Clone, Debug)]
+pub enum LinkStart<T> {
+    DeviceOutput(T, usize),
+    Input(T),
+}
+
+#[derive(Clone, Debug)]
+pub enum DeviceData<S, C, G> {
+    CombGate(G),
+    Chip(C),
+    Light(S),
+    Switch(S),
+}
+impl<S: Clone, C: IoAccess<S>, G: IoAccess<S>> DeviceData<S, C, G> {
+    pub fn get_output(&self, output: usize) -> S {
+        match self {
+            Self::CombGate(e) => e.get_output(output),
+            Self::Chip(e) => e.get_output(output),
+            Self::Light(_) => panic!("a light doesnt have an output"),
+            Self::Switch(state) => {
+                assert_eq!(output, 0);
+                state.clone()
+            }
+        }
+    }
+    pub fn get_input(&self, input: usize) -> S {
+        match self {
+            Self::CombGate(e) => e.get_input(input),
+            Self::Chip(e) => e.get_input(input),
+            Self::Light(state) => {
+                assert_eq!(input, 0);
+                state.clone()
+            }
+            Self::Switch(_) => panic!("a switch doesnt have an input"),
+        }
+    }
+
+    pub fn num_inputs(&self) -> usize {
+        match self {
+            Self::CombGate(e) => e.num_inputs(),
+            Self::Chip(e) => e.num_inputs(),
+            Self::Light(_) => 1,
+            Self::Switch(_) => 0,
+        }
+    }
+    pub fn num_outputs(&self) -> usize {
+        match self {
+            Self::CombGate(e) => e.num_outputs(),
+            Self::Chip(e) => e.num_outputs(),
+            Self::Light(_) => 0,
+            Self::Switch(_) => 1,
+        }
+    }
+}
+
+pub type Presets = HashMap<SimId, preset::DeviceData>;
 
 struct App {
     input_space: f32,
@@ -65,7 +153,7 @@ struct App {
     canvas_rect: Rect,
     presets: Presets,
     scene: scene::Scene,
-    link_start: Option<scene::LinkStart>,
+    link_start: Option<LinkStart<SimId>>,
     paused: bool,
     speed: u32,
 }
@@ -96,14 +184,15 @@ impl App {
     pub fn create(&mut self) {
         let chip = preset::chip::Chip::from_scene(&self.scene);
         self.presets
-            .insert(SimId::new(), preset::Device::Chip(chip));
+            .insert(SimId::new(), preset::DeviceData::Chip(chip));
         self.scene = scene::Scene::new();
     }
 
     pub fn place_preset(&mut self, preset_id: SimId, pos: Pos2) {
         let preset = self.presets.get(&preset_id).unwrap().clone();
 
-        self.scene.alloc_preset(preset_id, &preset, pos);
+        self.scene
+            .alloc_preset(preset_id, &preset, &self.presets, pos);
     }
 }
 impl eframe::App for App {
@@ -154,11 +243,12 @@ impl eframe::App for App {
                 }
 
                 if ui.button("debug scene").clicked() {
-                    println!("scene: {:#?}\n", self.scene);
+                    println!("scene: {}\n", good_debug(&self.scene));
                 }
                 if ui.button("debug presets").clicked() {
+                    println!("all presets:");
                     for (id, preset) in &self.presets {
-                        println!("preset {:?}: {:#?}\n", id, preset);
+                        print!("{:?}: {}", id, good_debug(preset));
                     }
                 }
             });
@@ -229,14 +319,14 @@ impl eframe::App for App {
                         graphics::show_scene(&mut ctx, &self.scene, &self.presets, &mut dead_links);
                     for (start, link_idx) in dead_links {
                         match start {
-                            scene::LinkStart::SceneInput(input) => self
+                            LinkStart::Input(input) => self
                                 .scene
                                 .inputs
                                 .get_mut(&input)
                                 .unwrap()
                                 .links
                                 .remove(link_idx),
-                            scene::LinkStart::DeviceOutput(device, output) => {
+                            LinkStart::DeviceOutput(device, output) => {
                                 self.scene.devices.get_mut(&device).unwrap().links[output]
                                     .remove(link_idx)
                             }
@@ -258,9 +348,9 @@ impl eframe::App for App {
                         Some(Input(SubInteraction { sub: id, int })) => {
                             if int.clicked {
                                 let state = self.scene.get_input(id);
-                                self.scene.set_input(id, !state);
+                                self.scene.write_input(id, !state);
                             } else if int.secondary_clicked {
-                                self.link_start = Some(scene::LinkStart::SceneInput(id));
+                                self.link_start = Some(LinkStart::Input(id));
                             }
                             if int.hovered && pressed_del {
                                 self.scene.inputs.remove(&id);
@@ -269,8 +359,7 @@ impl eframe::App for App {
                         Some(Output(SubInteraction { sub: id, int })) => {
                             if int.clicked {
                                 if let Some(link_start) = self.link_start.clone() {
-                                    self.scene
-                                        .add_link(link_start, scene::WriteTarget::SceneOutput(id));
+                                    self.scene.add_link(link_start, LinkTarget::Output(id));
                                     self.link_start = None;
                                 }
                             }
@@ -285,7 +374,7 @@ impl eframe::App for App {
                                 if let Some(link_start) = self.link_start.clone() {
                                     self.scene.add_link(
                                         link_start,
-                                        scene::WriteTarget::DeviceInput(device, input),
+                                        LinkTarget::DeviceInput(device, input),
                                     );
                                     self.link_start = None;
                                 } else {
@@ -298,8 +387,7 @@ impl eframe::App for App {
                             let SubInteraction { sub: output, int } = sub_int;
 
                             if int.clicked {
-                                self.link_start =
-                                    Some(scene::LinkStart::DeviceOutput(device, output));
+                                self.link_start = Some(LinkStart::DeviceOutput(device, output));
                             }
                         }
                     }
@@ -309,8 +397,8 @@ impl eframe::App for App {
                         if let Some(from) = self.scene.get_link_start_loc(&ctx, link_start.clone())
                         {
                             let state = match link_start {
-                                scene::LinkStart::SceneInput(input) => self.scene.get_input(*input),
-                                scene::LinkStart::DeviceOutput(device, output) => {
+                                LinkStart::Input(input) => self.scene.get_input(*input),
+                                LinkStart::DeviceOutput(device, output) => {
                                     self.scene.get_device_output(*device, *output)
                                 }
                             };
@@ -353,27 +441,28 @@ impl eframe::App for App {
             ui.separator();
 
             let mut place_preset = None;
-            // let mut del_preset = None;
+            let mut del_preset = None;
 
             for (id, preset) in &self.presets {
                 ui.horizontal(|ui| {
                     ui.add_space(LEFT_SP);
 
-                    if ui.button(preset.name()).clicked() {
+                    let button = ui.button(preset.name());
+                    if button.clicked() {
                         place_preset = Some(*id);
                         ui.close_menu();
                     }
-                    // if ui.button("del").clicked() {
-                    //     del_preset = Some(idx);
-                    // }
+                    if button.hovered() && pressed_del {
+                        del_preset = Some(*id);
+                    }
                 });
             }
             if let Some(preset) = place_preset {
                 self.place_preset(preset, pos);
             }
-            // if let Some(preset) = del_preset {
-            //     self.presets.remove(preset);
-            // }
+            if let Some(id) = del_preset {
+                self.presets.remove(&id);
+            }
         });
 
         ctx.request_repaint_after(core::time::Duration::from_millis(1000 / 60))

@@ -1,6 +1,4 @@
-use crate::preset;
-use crate::scene::{self, LinkStart, WriteTarget};
-use crate::{Presets, SimId};
+use crate::{preset, scene, LinkStart, LinkTarget, Presets, SimId};
 use eframe::egui::*;
 
 // TODO read tutuorial on how this thing works :>
@@ -232,7 +230,7 @@ pub fn show_device(
     ctx: &mut Context,
     pos: Pos2,
     scene: &scene::DeviceData,
-    preset: &preset::Device,
+    preset: &preset::DeviceData,
 ) -> DeviceInteraction {
     let (width, height) = preset.size();
 
@@ -266,7 +264,7 @@ pub fn show_device(
 
     let preset_inputs: Vec<(preset::IoLabel, bool)> = (0..preset.num_inputs())
         .into_iter()
-        .map(|i| (preset.get_input(i), scene.get_input(i)))
+        .map(|i| (preset.get_input_label(i), scene.get_input(i)))
         .collect();
 
     let io_sub_int = show_ios(
@@ -284,7 +282,7 @@ pub fn show_device(
     // ## show outputs
     let preset_outputs: Vec<(preset::IoLabel, bool)> = (0..preset.num_outputs())
         .into_iter()
-        .map(|i| (preset.get_output(i), scene.get_output(i)))
+        .map(|i| (preset.get_output_label(i), scene.get_output(i)))
         .collect();
 
     let io_sub_int = show_ios(
@@ -326,8 +324,8 @@ pub fn show_link(ctx: &mut Context, state: bool, from: Pos2, to: Pos2) -> Intera
 #[derive(Default)]
 pub struct ShowSceneResult {
     pub device_int: Option<SubInteraction<SimId>>,
-    pub finish_link: Option<WriteTarget>,
-    pub start_link: Option<LinkStart>,
+    pub finish_link: Option<LinkTarget<SimId>>,
+    pub start_link: Option<LinkStart<SimId>>,
     pub toggle_input: Option<SimId>,
     pub toggle_device_input: Option<(SimId, usize)>,
 }
@@ -345,7 +343,7 @@ pub fn show_scene(
     ctx: &mut Context,
     scene: &scene::Scene,
     presets: &Presets,
-    dead_links: &mut Vec<(LinkStart, usize)>,
+    dead_links: &mut Vec<(LinkStart<SimId>, usize)>,
 ) -> Option<SceneInteraction> {
     let mut int = None;
 
@@ -406,7 +404,7 @@ pub fn show_scene(
         let from = input_locs[input_idx] + Vec2::new(EDITOR_IO_SIZE.x, 0.0);
         for (link_idx, target) in input.links.clone().into_iter().rev().enumerate() {
             let Some(target_loc) = scene.get_target_loc(ctx, target) else {
-            	dead_links.push((LinkStart::SceneInput(*input_id), link_idx));
+            	dead_links.push((LinkStart::Input(*input_id), link_idx));
         		continue
         	};
 

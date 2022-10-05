@@ -1,30 +1,34 @@
 pub mod chip;
 
-use crate::preset;
-use crate::{BitField, SimId, TruthTable};
+use crate::{preset, BitField, IoAccess, LinkStart, LinkTarget, Presets, SimId, TruthTable};
 use eframe::egui::Pos2;
 use std::collections::HashMap;
 
-#[derive(Debug)]
-pub struct ChangedOutput {
+#[derive(Debug, Clone)]
+pub struct SetOutput {
     pub output: usize,
     pub state: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Write {
-    pub target: WriteTarget,
+    pub target: LinkTarget<SimId>,
     pub state: bool,
 }
-#[derive(Clone, Debug)]
-pub enum WriteTarget {
-    DeviceInput(SimId, usize),
-    SceneOutput(SimId),
-}
-#[derive(Clone, Debug)]
-pub enum LinkStart {
-    SceneInput(SimId),
-    DeviceOutput(SimId, usize),
+
+pub type DeviceData = crate::DeviceData<bool, chip::Chip, CombGate>;
+impl DeviceData {
+    pub fn write_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
+        match self {
+            Self::CombGate(e) => e.write_input(input, state, set_outputs),
+            Self::Chip(e) => e.write_input(input, state, set_outputs),
+            Self::Light(e) => {
+                assert_eq!(input, 0);
+                *e = state;
+            }
+            Self::Switch(_) => panic!("a switch doent have an input"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -32,7 +36,7 @@ pub struct Device {
     pub preset: SimId,
     pub pos: Pos2,
     pub data: DeviceData,
-    pub links: Vec<Vec<WriteTarget>>,
+    pub links: Vec<Vec<LinkTarget<SimId>>>,
     pub input_locs: Vec<Pos2>,
     pub output_locs: Vec<Pos2>,
 }
@@ -51,116 +55,29 @@ impl Device {
     }
 
     #[inline(always)]
-    pub fn links_for_output(&self, output: usize) -> Vec<WriteTarget> {
+    pub fn links_for_output(&self, output: usize) -> Vec<LinkTarget<SimId>> {
         self.links[output].clone()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum DeviceData {
-    CombGate(CombGate),
-    Chip(chip::Chip),
-    Light(bool),
-    Switch(bool),
-}
-impl DeviceData {
-    pub fn set_input(
-        &mut self,
-        input: usize,
-        state: bool,
-        changed_outputs: &mut Vec<ChangedOutput>,
-    ) {
-        match self {
-            Self::CombGate(e) => e.set_input(input, state, changed_outputs),
-            Self::Chip(e) => e.set_input(input, state, changed_outputs),
-            Self::Light(e) => {
-                assert_eq!(input, 0);
-                *e = state;
-            }
-            Self::Switch(_) => panic!("a switch doent have an input"),
-        }
-    }
-
-    pub fn get_output(&self, output: usize) -> bool {
-        match self {
-            Self::CombGate(e) => e.get_output(output),
-            Self::Chip(e) => e.get_output(output),
-            Self::Light(_) => panic!("a light doesnt have an output"),
-            Self::Switch(state) => {
-                assert_eq!(output, 0);
-                *state
-            }
-        }
-    }
-    pub fn get_input(&self, input: usize) -> bool {
-        match self {
-            Self::CombGate(e) => e.get_input(input),
-            Self::Chip(e) => e.get_input(input),
-            Self::Light(state) => {
-                assert_eq!(input, 0);
-                *state
-            }
-            Self::Switch(_) => panic!("a switch doesnt have an input"),
-        }
-    }
-
-    pub fn num_inputs(&self) -> usize {
-        match self {
-            Self::CombGate(e) => e.num_inputs(),
-            Self::Chip(e) => e.num_inputs(),
-            Self::Light(_) => 1,
-            Self::Switch(_) => 0,
-        }
-    }
-    pub fn num_outputs(&self) -> usize {
-        match self {
-            Self::CombGate(e) => e.num_outputs(),
-            Self::Chip(e) => e.num_outputs(),
-            Self::Light(_) => 0,
-            Self::Switch(_) => 1,
-        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct CombGate {
+    pub preset: SimId,
     pub input: BitField,
     pub output: BitField,
     pub table: TruthTable,
 }
 impl CombGate {
-    pub fn new(table: TruthTable) -> Self {
+    pub fn new(preset: SimId, table: TruthTable) -> Self {
         Self {
+            preset,
             input: BitField(0),
             output: table.map[0],
             table,
         }
     }
 
-    #[inline(always)]
-    pub fn num_inputs(&self) -> usize {
-        self.table.num_inputs
-    }
-    #[inline(always)]
-    pub fn num_outputs(&self) -> usize {
-        self.table.num_outputs
-    }
-
-    #[inline(always)]
-    pub fn get_output(&self, output: usize) -> bool {
-        self.output.get(output)
-    }
-    #[inline(always)]
-    pub fn get_input(&self, input: usize) -> bool {
-        self.input.get(input)
-    }
-
-    pub fn set_input(
-        &mut self,
-        input: usize,
-        state: bool,
-        changed_outputs: &mut Vec<ChangedOutput>,
-    ) {
+    pub fn write_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
         self.input.set(input, state);
         let result = self.table.get(self.input);
 
@@ -172,7 +89,7 @@ impl CombGate {
             if self.output.get(i) == result.get(i) {
                 continue;
             }
-            changed_outputs.push(ChangedOutput {
+            set_outputs.push(SetOutput {
                 output: i,
                 state: result.get(i),
             });
@@ -180,12 +97,31 @@ impl CombGate {
         self.output = result;
     }
 }
+impl crate::IoAccess<bool> for CombGate {
+    #[inline(always)]
+    fn num_inputs(&self) -> usize {
+        self.table.num_inputs
+    }
+    #[inline(always)]
+    fn num_outputs(&self) -> usize {
+        self.table.num_outputs
+    }
+
+    #[inline(always)]
+    fn get_output(&self, output: usize) -> bool {
+        self.output.get(output)
+    }
+    #[inline(always)]
+    fn get_input(&self, input: usize) -> bool {
+        self.input.get(input)
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct Input {
     pub label: preset::IoLabel,
     pub state: bool,
-    pub links: Vec<WriteTarget>,
+    pub links: Vec<LinkTarget<SimId>>,
 }
 #[derive(Debug, Default, Clone)]
 pub struct Output {
@@ -193,7 +129,7 @@ pub struct Output {
     pub state: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Scene {
     pub name: String,
     pub color: [f32; 3],
@@ -219,13 +155,13 @@ impl Scene {
     pub fn get_target_loc(
         &self,
         ctx: &crate::graphics::Context,
-        target: WriteTarget,
+        target: LinkTarget<SimId>,
     ) -> Option<Pos2> {
         match target {
-            WriteTarget::DeviceInput(device, input) => {
+            LinkTarget::DeviceInput(device, input) => {
                 Some(self.devices.get(&device)?.input_locs[input])
             }
-            WriteTarget::SceneOutput(output) => {
+            LinkTarget::Output(output) => {
                 use crate::graphics::{calc_io_unsized_locs, EDITOR_IO_SIZE, EDITOR_IO_SP};
 
                 let output = self.outputs.iter().position(|(key, _)| *key == output)?;
@@ -245,13 +181,13 @@ impl Scene {
     pub fn get_link_start_loc(
         &self,
         ctx: &crate::graphics::Context,
-        link_start: LinkStart,
+        link_start: LinkStart<SimId>,
     ) -> Option<Pos2> {
         match link_start {
             LinkStart::DeviceOutput(device, output) => {
                 Some(self.devices.get(&device)?.output_locs[output])
             }
-            LinkStart::SceneInput(input) => {
+            LinkStart::Input(input) => {
                 use crate::graphics::{calc_io_unsized_locs, EDITOR_IO_SIZE, EDITOR_IO_SP};
 
                 let input = self.inputs.iter().position(|(key, _)| *key == input)?;
@@ -268,26 +204,26 @@ impl Scene {
         }
     }
 
-    pub fn write(&mut self, target: WriteTarget, state: bool) {
+    pub fn write(&mut self, target: LinkTarget<SimId>, state: bool) {
         match target {
-            WriteTarget::DeviceInput(device, input) => {
+            LinkTarget::DeviceInput(device, input) => {
                 let Some(device) = self.devices.get_mut(&device) else { return };
-                let mut changed_outputs = Vec::new();
+                let mut set_outputs = Vec::new();
 
-                device.data.set_input(input, state, &mut changed_outputs);
+                device.data.write_input(input, state, &mut set_outputs);
 
-                for changed_output in changed_outputs {
-                    let links = device.links_for_output(changed_output.output);
+                for set_output in set_outputs {
+                    let links = device.links_for_output(set_output.output);
 
                     for target in links {
                         self.writes.push(Write {
                             target,
-                            state: changed_output.state,
+                            state: set_output.state,
                         });
                     }
                 }
             }
-            WriteTarget::SceneOutput(output) => {
+            LinkTarget::Output(output) => {
                 let Some(output) = self.outputs.get_mut(&output) else { return };
                 output.state = state;
             }
@@ -304,14 +240,14 @@ impl Scene {
 
         for (_, device) in &mut self.devices {
             if let DeviceData::Chip(chip) = &mut device.data {
-                let mut changed_outputs = Vec::new();
-                chip.update(&mut changed_outputs);
+                let mut set_outputs = Vec::new();
+                chip.update(&mut set_outputs);
 
-                for changed_output in changed_outputs {
-                    for target in device.links_for_output(changed_output.output) {
+                for set_output in set_outputs {
+                    for target in device.links_for_output(set_output.output) {
                         self.writes.push(Write {
                             target,
-                            state: changed_output.state,
+                            state: set_output.state,
                         });
                     }
                 }
@@ -319,7 +255,7 @@ impl Scene {
         }
     }
 
-    pub fn set_input(&mut self, input: SimId, state: bool) {
+    pub fn write_input(&mut self, input: SimId, state: bool) {
         let Some(input) = self.inputs.get_mut(&input) else { return };
         if input.state == state {
             return;
@@ -334,24 +270,15 @@ impl Scene {
         if device.data.get_input(input) == state {
             return;
         }
-        let mut changed_outputs = Vec::new();
+        let mut set_outputs = Vec::new();
 
-        device.data.set_input(input, state, &mut changed_outputs);
+        device.data.write_input(input, state, &mut set_outputs);
 
-        for ChangedOutput { output, state } in changed_outputs {
+        for SetOutput { output, state } in set_outputs {
             for target in device.links[output].clone() {
                 self.writes.push(Write { target, state });
             }
         }
-    }
-
-    #[inline(always)]
-    pub fn get_input(&self, input: SimId) -> bool {
-        self.inputs.get(&input).unwrap().state
-    }
-    #[inline(always)]
-    pub fn get_output(&self, output: SimId) -> bool {
-        self.outputs.get(&output).unwrap().state
     }
 
     #[inline(always)]
@@ -363,12 +290,20 @@ impl Scene {
         self.devices.get(&device).unwrap().data.get_output(output)
     }
 
-    pub fn alloc_preset(&mut self, preset_id: SimId, preset: &preset::Device, pos: Pos2) -> SimId {
+    pub fn alloc_preset(
+        &mut self,
+        preset_id: SimId,
+        preset: &preset::DeviceData,
+        presets: &Presets,
+        pos: Pos2,
+    ) -> SimId {
         let scene_device = match preset {
-            preset::Device::CombGate(e) => DeviceData::CombGate(CombGate::new(e.table.clone())),
-            preset::Device::Chip(e) => DeviceData::Chip(chip::Chip::from_preset(e)),
-            preset::Device::Light => DeviceData::Light(false),
-            preset::Device::Switch => DeviceData::Switch(false),
+            preset::DeviceData::CombGate(e) => {
+                DeviceData::CombGate(CombGate::new(preset_id, e.table.clone()))
+            }
+            preset::DeviceData::Chip(e) => DeviceData::Chip(chip::Chip::from_preset(e, presets)),
+            preset::DeviceData::Light(_) => DeviceData::Light(false),
+            preset::DeviceData::Switch(_) => DeviceData::Switch(false),
         };
         self.alloc_device(Device::new(preset_id, scene_device, pos))
     }
@@ -391,9 +326,9 @@ impl Scene {
         id
     }
 
-    pub fn add_link(&mut self, start: LinkStart, link: WriteTarget) {
+    pub fn add_link(&mut self, start: LinkStart<SimId>, link: LinkTarget<SimId>) {
         match start {
-            LinkStart::SceneInput(input) => {
+            LinkStart::Input(input) => {
                 let input = self.inputs.get_mut(&input).unwrap();
                 input.links.push(link.clone());
                 let state = input.state;
@@ -414,5 +349,26 @@ impl Scene {
                 });
             }
         }
+    }
+}
+/// IO Acess
+// can't use trait because inputs are identified by an Id, instead of a usize.
+impl Scene {
+    #[inline(always)]
+    pub fn num_inputs(&self) -> usize {
+        self.inputs.len()
+    }
+    #[inline(always)]
+    pub fn num_outputs(&self) -> usize {
+        self.outputs.len()
+    }
+
+    #[inline(always)]
+    pub fn get_input(&self, input: SimId) -> bool {
+        self.inputs.get(&input).unwrap().state
+    }
+    #[inline(always)]
+    pub fn get_output(&self, output: SimId) -> bool {
+        self.outputs.get(&output).unwrap().state
     }
 }
