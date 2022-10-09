@@ -142,6 +142,23 @@ impl<S: Clone, C: IoAccess<S>, G: IoAccess<S>> DeviceData<S, C, G> {
     }
 }
 
+struct CreatePreset {
+    name: String,
+    color: [f32; 3],
+    category: SimId,
+    combinational: bool,
+}
+impl CreatePreset {
+    pub fn new() -> Self {
+        Self {
+            name: format!("New Chip {}", fastrand::u16(10000..)),
+            color: [1.0; 3],
+            category: SimId(0),
+            combinational: false,
+        }
+    }
+}
+
 struct App {
     input_space: f32,
     output_space: f32,
@@ -151,6 +168,7 @@ struct App {
     link_start: Option<LinkStart<SimId>>,
     paused: bool,
     speed: u32,
+    create_preset: CreatePreset,
 }
 impl App {
     pub fn new() -> Self {
@@ -166,14 +184,28 @@ impl App {
             paused: false,
             speed: 1,
             link_start: None,
+            create_preset: CreatePreset::new(),
         }
     }
 
     pub fn create(&mut self) {
-        let chip = preset::chip::Chip::from_scene(&self.scene);
-        let cat_id = SimId(0);
+        let mut create_preset = CreatePreset::new();
+        std::mem::swap(&mut create_preset, &mut self.create_preset);
+
+        let CreatePreset {
+            name,
+            color,
+            category,
+            combinational,
+        } = create_preset;
+
+        if combinational {
+            unimplemented!("creating combination gates is not supported yet");
+        }
+
+        let chip = preset::chip::Chip::from_scene(&name, color, &self.scene);
         self.presets
-            .add_preset(cat_id, preset::DeviceData::Chip(chip));
+            .add_preset(category, preset::DeviceData::Chip(chip));
         self.scene = scene::Scene::new();
     }
 
@@ -199,20 +231,25 @@ impl eframe::App for App {
         ctx.set_visuals(Visuals::dark());
         TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.scene.name);
-
-                ui.color_edit_button_rgb(&mut self.scene.color);
-
-                ui.checkbox(&mut self.scene.combinational, "combinational");
-
-                if ui.button("Create").clicked() {
+                if ui.button("Create Preset").clicked() {
                     self.create();
                 }
+
+                ui.label("name: ");
+                ui.text_edit_singleline(&mut self.create_preset.name);
+
+                ui.label("color: ");
+                ui.color_edit_button_rgb(&mut self.create_preset.color);
+
+                ui.label("combinational: ");
+                ui.checkbox(&mut self.create_preset.combinational, "");
             });
         });
 
         TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                ui.heading("Sim: ");
+
                 let pause_unpause_txt = if self.paused { "unpause" } else { "pause" };
                 let pause_response = ui.button(pause_unpause_txt);
                 if pause_response.clicked() {
@@ -276,9 +313,14 @@ impl eframe::App for App {
                         ));
                     }
 
+                    let mut dead_devices = Vec::new();
+
                     use graphics::DEVICE_IO_SIZE;
-                    for (_id, device) in &mut self.scene.devices {
-                        let device_preset = self.presets.get_preset(device.preset).unwrap();
+                    for (device_id, device) in &mut self.scene.devices {
+                        let Some(device_preset) = self.presets.get_preset(device.preset) else {
+                        	dead_devices.push(*device_id);
+                        	continue
+                        };
                         let (width, height) = device_preset.size();
 
                         // tl: Pos2, height: f32, num_ios: usize
@@ -298,10 +340,14 @@ impl eframe::App for App {
 
                         device.output_locs = output_locs;
                     }
+                    for dead_device in dead_devices {
+                        self.scene.devices.remove(&dead_device);
+                    }
 
                     let mut dead_links = Vec::new();
                     let scene_int =
                         graphics::show_scene(&mut ctx, &self.scene, &self.presets, &mut dead_links);
+                    dead_links.sort_by(|a, b| a.1.cmp(&b.1).reverse());
                     for (start, link_idx) in dead_links {
                         match start {
                             LinkStart::Input(input) => self
@@ -378,7 +424,6 @@ impl eframe::App for App {
                     }
 
                     if let Some(link_start) = &self.link_start {
-                        // TODO remove unwraps
                         if let Some(from) = self.scene.get_link_start_loc(&ctx, link_start.clone())
                         {
                             let state = match link_start {

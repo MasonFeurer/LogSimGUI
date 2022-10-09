@@ -186,9 +186,6 @@ impl GoodDebug for crate::scene::Scene {
     fn good_debug(&self, f: &mut Fmtter) {
         f.push_str("Scene\n");
         f.indent();
-        f.push_field("name", &self.name);
-        f.push_field("color", &self.color);
-        f.push_field("combinational", &self.combinational);
         f.push_field("inputs", &self.inputs);
         f.push_field("outputs", &self.outputs);
         f.push_field("devices", &self.devices);

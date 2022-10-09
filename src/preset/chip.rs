@@ -228,15 +228,12 @@ pub struct Chip {
     pub devices: Vec<Device>,
 }
 impl Chip {
-    pub fn from_scene(scene: &scene::Scene) -> Self {
-        std::io::Write::flush(&mut std::io::stdout()).unwrap();
-
+    pub fn from_scene(name: &str, color: [f32; 3], scene: &scene::Scene) -> Self {
         let color = Color32::from_rgb(
-            (scene.color[0] * 255.0) as u8,
-            (scene.color[1] * 255.0) as u8,
-            (scene.color[2] * 255.0) as u8,
+            (color[0] * 255.0) as u8,
+            (color[1] * 255.0) as u8,
+            (color[2] * 255.0) as u8,
         );
-        let name = scene.name.clone();
 
         let mut scene = scene.clone();
 
@@ -310,7 +307,7 @@ impl Chip {
             .collect();
 
         Self {
-            name,
+            name: name.to_owned(),
             color,
             inputs,
             outputs,

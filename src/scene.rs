@@ -131,9 +131,6 @@ pub struct Output {
 
 #[derive(Debug, Clone)]
 pub struct Scene {
-    pub name: String,
-    pub color: [f32; 3],
-    pub combinational: bool,
     pub inputs: HashMap<SimId, Input>,
     pub outputs: HashMap<SimId, Output>,
     pub devices: HashMap<SimId, Device>,
@@ -142,9 +139,6 @@ pub struct Scene {
 impl Scene {
     pub fn new() -> Self {
         Self {
-            name: format!("NewChip {}", fastrand::u16(10000..)),
-            color: [1.0; 3],
-            combinational: false,
             inputs: HashMap::new(),
             outputs: HashMap::new(),
             devices: HashMap::new(),
