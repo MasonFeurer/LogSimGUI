@@ -4,8 +4,6 @@
 // TODO allow for changing IoLabel's in scene inputs/outputs
 //  a button to the left, that opens a menu that allows for such edits
 
-// TODO creating ID's for presets should be based off of time, so that they are stored in order of time created
-
 pub mod debug;
 pub mod graphics;
 pub mod preset;
@@ -13,11 +11,10 @@ pub mod scene;
 
 use debug::good_debug;
 use eframe::egui::*;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SimId(u32);
 impl SimId {
     pub fn new() -> Self {
@@ -145,13 +142,11 @@ impl<S: Clone, C: IoAccess<S>, G: IoAccess<S>> DeviceData<S, C, G> {
     }
 }
 
-pub type Presets = HashMap<SimId, preset::DeviceData>;
-
 struct App {
     input_space: f32,
     output_space: f32,
     canvas_rect: Rect,
-    presets: Presets,
+    presets: preset::Presets,
     scene: scene::Scene,
     link_start: Option<LinkStart<SimId>>,
     paused: bool,
@@ -159,13 +154,6 @@ struct App {
 }
 impl App {
     pub fn new() -> Self {
-        let default_presets = preset::default_presets();
-
-        let mut presets = HashMap::with_capacity(default_presets.len());
-        for preset in default_presets {
-            presets.insert(SimId::new(), preset);
-        }
-
         Self {
             input_space: 40.0,
             output_space: 40.0,
@@ -173,7 +161,7 @@ impl App {
                 min: Pos2::ZERO,
                 max: Pos2::ZERO,
             },
-            presets,
+            presets: preset::Presets::defaults(),
             scene: scene::Scene::new(),
             paused: false,
             speed: 1,
@@ -183,16 +171,16 @@ impl App {
 
     pub fn create(&mut self) {
         let chip = preset::chip::Chip::from_scene(&self.scene);
+        let cat_id = SimId(0);
         self.presets
-            .insert(SimId::new(), preset::DeviceData::Chip(chip));
+            .add_preset(cat_id, preset::DeviceData::Chip(chip));
         self.scene = scene::Scene::new();
     }
 
-    pub fn place_preset(&mut self, preset_id: SimId, pos: Pos2) {
-        let preset = self.presets.get(&preset_id).unwrap().clone();
+    pub fn place_preset(&mut self, id: SimId, pos: Pos2) {
+        let preset = self.presets.get_preset(id).unwrap().clone();
 
-        self.scene
-            .alloc_preset(preset_id, &preset, &self.presets, pos);
+        self.scene.alloc_preset(id, &preset, &self.presets, pos);
     }
 }
 impl eframe::App for App {
@@ -246,10 +234,7 @@ impl eframe::App for App {
                     println!("scene: {}\n", good_debug(&self.scene));
                 }
                 if ui.button("debug presets").clicked() {
-                    println!("all presets:");
-                    for (id, preset) in &self.presets {
-                        print!("{:?}: {}", id, good_debug(preset));
-                    }
+                    todo!()
                 }
             });
         });
@@ -291,14 +276,14 @@ impl eframe::App for App {
                         ));
                     }
 
-                    let io_size = Vec2::new(20.0, 5.0);
+                    use graphics::DEVICE_IO_SIZE;
                     for (_id, device) in &mut self.scene.devices {
-                        let device_preset = self.presets.get(&device.preset).unwrap();
+                        let device_preset = self.presets.get_preset(device.preset).unwrap();
                         let (width, height) = device_preset.size();
 
-                        // tl: Pos2, height: f32, _io_size: Vec2, num_ios: usize
+                        // tl: Pos2, height: f32, num_ios: usize
                         let input_locs = graphics::calc_io_locs(
-                            device.pos - Vec2::new(io_size.x, 0.0),
+                            device.pos - Vec2::new(DEVICE_IO_SIZE.x, 0.0),
                             height,
                             device.data.num_inputs(),
                         );
@@ -306,7 +291,7 @@ impl eframe::App for App {
                         device.input_locs = input_locs;
 
                         let output_locs = graphics::calc_io_locs(
-                            device.pos + Vec2::new(width + io_size.x, 0.0),
+                            device.pos + Vec2::new(width + DEVICE_IO_SIZE.x, 0.0),
                             height,
                             device.data.num_outputs(),
                         );
@@ -434,34 +419,44 @@ impl eframe::App for App {
             const LEFT_SP: f32 = 15.0;
 
             ui.add_space(5.0);
-            ui.horizontal(|ui| {
-                ui.add_space(LEFT_SP);
-                ui.label(RichText::new("Place device").strong());
-            });
-            ui.separator();
 
             let mut place_preset = None;
             let mut del_preset = None;
 
-            for (id, preset) in &self.presets {
+            for (cat_id, presets) in self.presets.get_sorted() {
+                let cat_name = self.presets.get_category_name(*cat_id).unwrap();
                 ui.horizontal(|ui| {
                     ui.add_space(LEFT_SP);
-
-                    let button = ui.button(preset.name());
-                    if button.clicked() {
-                        place_preset = Some(*id);
-                        ui.close_menu();
-                    }
-                    if button.hovered() && pressed_del {
-                        del_preset = Some(*id);
-                    }
+                    ui.label(RichText::new(cat_name).strong());
                 });
+                ui.separator();
+                ui.add_space(5.0);
+                for preset_id in presets {
+                    let preset = self.presets.get_preset(*preset_id).unwrap();
+                    ui.horizontal(|ui| {
+                        ui.add_space(LEFT_SP);
+
+                        let stroke = Stroke {
+                            width: 2.0,
+                            color: preset.color().unwrap_or(Color32::WHITE),
+                        };
+                        let button = Button::new(preset.name()).stroke(stroke).ui(ui);
+                        if button.clicked() {
+                            place_preset = Some(*preset_id);
+                            ui.close_menu();
+                        }
+                        if button.hovered() && pressed_del {
+                            del_preset = Some(*preset_id);
+                        }
+                    });
+                }
             }
-            if let Some(preset) = place_preset {
-                self.place_preset(preset, pos);
+
+            if let Some(id) = place_preset {
+                self.place_preset(id, pos);
             }
             if let Some(id) = del_preset {
-                self.presets.remove(&id);
+                self.presets.remove_preset(id);
             }
         });
 

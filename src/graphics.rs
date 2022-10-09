@@ -1,4 +1,4 @@
-use crate::{preset, scene, LinkStart, LinkTarget, Presets, SimId};
+use crate::{preset, scene, LinkStart, LinkTarget, SimId};
 use eframe::egui::*;
 
 // TODO read tutuorial on how this thing works :>
@@ -39,6 +39,8 @@ pub fn line_contains_point(line: (Pos2, Pos2), width: f32, point: Pos2) -> bool 
 
 pub const EDITOR_IO_SIZE: Vec2 = Vec2::new(30.0, 10.0);
 pub const EDITOR_IO_SP: f32 = 20.0;
+pub const DEVICE_IO_SIZE: Vec2 = Vec2::new(15.0, 8.0);
+pub const DEVICE_IO_SP: f32 = 10.0;
 
 #[inline(always)]
 pub fn state_color(state: bool) -> Color32 {
@@ -260,8 +262,6 @@ pub fn show_device(
     ctx.shapes.push(Shape::rect_stroke(rect, rounding, stroke));
 
     // ## show inputs
-    let io_size = Vec2::new(20.0, 5.0);
-
     let preset_inputs: Vec<(preset::IoLabel, bool)> = (0..preset.num_inputs())
         .into_iter()
         .map(|i| (preset.get_input_label(i), scene.get_input(i)))
@@ -270,9 +270,9 @@ pub fn show_device(
     let io_sub_int = show_ios(
         ctx,
         ".input",
-        pos - Vec2::new(io_size.x, 0.0),
+        pos - Vec2::new(DEVICE_IO_SIZE.x, 0.0),
         height,
-        io_size,
+        DEVICE_IO_SIZE,
         &preset_inputs,
     );
     if let Some(sub_int) = io_sub_int {
@@ -290,7 +290,7 @@ pub fn show_device(
         ".output",
         pos + Vec2::new(width, 0.0),
         height,
-        io_size,
+        DEVICE_IO_SIZE,
         &preset_outputs,
     );
     if let Some(sub_int) = io_sub_int {
@@ -342,13 +342,13 @@ pub enum SceneInteraction {
 pub fn show_scene(
     ctx: &mut Context,
     scene: &scene::Scene,
-    presets: &Presets,
+    presets: &preset::Presets,
     dead_links: &mut Vec<(LinkStart<SimId>, usize)>,
 ) -> Option<SceneInteraction> {
     let mut int = None;
 
     for (device_id, scene_device) in &scene.devices {
-        let device_preset = presets.get(&scene_device.preset).unwrap();
+        let device_preset = presets.get_preset(scene_device.preset).unwrap();
 
         ctx.push_id(|prev_id| prev_id.with(".device_").with(device_id));
         let device_int = show_device(ctx, scene_device.pos, &scene_device.data, device_preset);
@@ -388,6 +388,7 @@ pub fn show_scene(
 
     for (input_idx, (input_id, input)) in scene.inputs.iter().enumerate() {
         ctx.push_id(|prev_id| prev_id.with(".input_").with(input_id));
+
         let io_int = show_io(
             ctx,
             EDITOR_IO_SIZE,

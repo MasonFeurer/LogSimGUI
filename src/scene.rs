@@ -1,6 +1,6 @@
 pub mod chip;
 
-use crate::{preset, BitField, IoAccess, LinkStart, LinkTarget, Presets, SimId, TruthTable};
+use crate::{preset, BitField, IoAccess, LinkStart, LinkTarget, SimId, TruthTable};
 use eframe::egui::Pos2;
 use std::collections::HashMap;
 
@@ -294,7 +294,7 @@ impl Scene {
         &mut self,
         preset_id: SimId,
         preset: &preset::DeviceData,
-        presets: &Presets,
+        presets: &preset::Presets,
         pos: Pos2,
     ) -> SimId {
         let scene_device = match preset {

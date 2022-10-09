@@ -1,5 +1,5 @@
 use super::{CombGate, SetOutput};
-use crate::{preset, BitField, LinkTarget, Presets, SimId};
+use crate::{preset, BitField, LinkTarget, SimId};
 
 #[derive(Debug, Clone)]
 pub struct Device {
@@ -27,7 +27,7 @@ pub struct Chip {
     pub devices: Vec<Device>,
 }
 impl Chip {
-    pub fn from_preset(preset: &preset::chip::Chip, presets: &Presets) -> Self {
+    pub fn from_preset(preset: &preset::chip::Chip, presets: &preset::Presets) -> Self {
         let inputs = preset
             .inputs
             .iter()
@@ -45,7 +45,7 @@ impl Chip {
         let mut writes = Vec::new();
         let mut devices = Vec::new();
         for device in &preset.devices {
-            let device_preset = presets.get(&device.preset).unwrap();
+            let device_preset = presets.get_preset(device.preset).unwrap();
             let data = match device_preset {
                 preset::DeviceData::CombGate(e) => {
                     let output = e.table.get(BitField(0));
