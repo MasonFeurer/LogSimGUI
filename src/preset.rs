@@ -140,8 +140,6 @@ pub struct Presets {
 
     presets: HashMap<SimId, Preset>,
     next_preset_id: SimId,
-
-    sorted: Vec<(SimId, Vec<SimId>)>,
 }
 impl Presets {
     pub fn new() -> Self {
@@ -151,8 +149,6 @@ impl Presets {
 
             presets: HashMap::new(),
             next_preset_id: SimId(0),
-
-            sorted: Vec::new(),
         }
     }
     pub fn defaults() -> Self {
@@ -161,32 +157,10 @@ impl Presets {
         new
     }
 
-    fn sort(&mut self) {
-        let mut sorted: Vec<(SimId, Vec<SimId>)> = Vec::with_capacity(self.sorted.len());
-
-        let mut presets: Vec<_> = self.presets.iter().collect();
-        presets.sort_by(|(a_id, a), (b_id, b)| {
-            if a.category == b.category {
-                a_id.cmp(&b_id)
-            } else {
-                a.category.cmp(&b.category)
-            }
-        });
-        let mut prev_cat = None;
-        for (preset_id, preset) in presets {
-            if prev_cat != Some(preset.category) {
-                sorted.push((preset.category, Vec::new()));
-                prev_cat = Some(preset.category);
-            }
-            sorted.last_mut().unwrap().1.push(*preset_id);
-        }
-        self.sorted = sorted;
-    }
-
     pub fn get_preset(&self, id: SimId) -> Option<&DeviceData> {
         self.presets.get(&id).map(|e| &e.device)
     }
-    pub fn get_category_name(&self, id: SimId) -> Option<&str> {
+    pub fn get_cat(&self, id: SimId) -> Option<&str> {
         self.categories.get(&id).map(String::as_str)
     }
 
@@ -194,7 +168,6 @@ impl Presets {
         let id = self.next_preset_id;
         self.next_preset_id = SimId(id.0 + 1);
         self.presets.insert(id, Preset { category, device });
-        self.sort();
         id
     }
     pub fn add_presets(&mut self, category: SimId, devices: &[DeviceData]) -> Vec<SimId> {
@@ -205,11 +178,10 @@ impl Presets {
             self.presets.insert(id, Preset { category, device });
             ids.push(id);
         }
-        self.sort();
         ids
     }
 
-    pub fn remove_category(&mut self, category: SimId) {
+    pub fn remove_cat(&mut self, category: SimId) {
         self.categories.remove(&category);
         let mut remove_presets = Vec::new();
         for (preset_id, preset) in &self.presets {
@@ -220,17 +192,14 @@ impl Presets {
         for preset in remove_presets {
             self.presets.remove(&preset);
         }
-        self.sort();
     }
     pub fn remove_preset(&mut self, preset: SimId) {
         self.presets.remove(&preset);
-        self.sort();
     }
     pub fn add_category(&mut self, category: String) -> SimId {
         let id = self.next_category_id;
         self.next_category_id = SimId(id.0 + 1);
         self.categories.insert(id, category);
-        self.sort();
         id
     }
 
@@ -249,8 +218,23 @@ impl Presets {
     }
 
     #[inline(always)]
-    pub fn get_sorted(&self) -> &Vec<(SimId, Vec<SimId>)> {
-        &self.sorted
+    pub fn get_categories(&self) -> Vec<(SimId, String)> {
+        let mut cats: Vec<_> = self
+            .categories
+            .iter()
+            .map(|(id, name)| (*id, name.clone()))
+            .collect();
+        cats.sort_by(|(a_id, _), (b_id, _)| a_id.cmp(&b_id));
+        cats
+    }
+    pub fn get_cat_presets(&self, cat: SimId) -> Vec<(SimId, &DeviceData)> {
+        let mut result = Vec::new();
+        for (preset_id, preset) in &self.presets {
+            if preset.category == cat {
+                result.push((*preset_id, &preset.device));
+            }
+        }
+        result
     }
 }
 
@@ -341,5 +325,27 @@ pub fn or_gate() -> CombGate {
                 BitField(1), // 11
             ],
         },
+    }
+}
+
+use crate::debug::{Fmtter, GoodDebug};
+impl GoodDebug for Preset {
+    fn good_debug(&self, f: &mut Fmtter) {
+        f.push_str("Preset\n");
+        f.indent();
+        f.push_field("category", &self.category);
+        f.push_field("device", &self.device);
+        f.unindent();
+    }
+}
+impl GoodDebug for Presets {
+    fn good_debug(&self, f: &mut Fmtter) {
+        f.push_str("Presets\n");
+        f.indent();
+        f.push_field("categories", &self.categories);
+        f.push_field("next_category_id", &self.next_category_id);
+        f.push_field("presets", &self.presets);
+        f.push_field("next_preset_id", &self.next_preset_id);
+        f.unindent();
     }
 }

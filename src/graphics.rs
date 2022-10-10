@@ -2,6 +2,7 @@ use crate::{preset, scene, LinkStart, LinkTarget, SimId};
 use eframe::egui::*;
 
 // TODO read tutuorial on how this thing works :>
+// http://www.sunshine2k.de/coding/java/PointOnLine/PointOnLine.html
 pub fn project_point_onto_line(p: Pos2, line: (Pos2, Pos2)) -> Pos2 {
     let (v1, v2) = line;
 

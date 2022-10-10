@@ -1,8 +1,11 @@
 #![feature(never_type)]
 #![feature(exhaustive_patterns)]
+#![feature(let_chains)]
 
 // TODO allow for changing IoLabel's in scene inputs/outputs
 //  a button to the left, that opens a menu that allows for such edits
+
+// TODO allow for saving/loading of presets to/from a file
 
 pub mod debug;
 pub mod graphics;
@@ -145,7 +148,8 @@ impl<S: Clone, C: IoAccess<S>, G: IoAccess<S>> DeviceData<S, C, G> {
 struct CreatePreset {
     name: String,
     color: [f32; 3],
-    category: SimId,
+    cat: SimId,
+    new_cat_name: String,
     combinational: bool,
 }
 impl CreatePreset {
@@ -153,10 +157,17 @@ impl CreatePreset {
         Self {
             name: format!("New Chip {}", fastrand::u16(10000..)),
             color: [1.0; 3],
-            category: SimId(0),
+            cat: SimId(0),
+            new_cat_name: String::new(),
             combinational: false,
         }
     }
+}
+
+#[derive(Clone)]
+struct ShortcutPlacer {
+    pos: Pos2,
+    cat: Option<SimId>,
 }
 
 struct App {
@@ -169,6 +180,7 @@ struct App {
     paused: bool,
     speed: u32,
     create_preset: CreatePreset,
+    shortcut_placer: Option<ShortcutPlacer>,
 }
 impl App {
     pub fn new() -> Self {
@@ -185,6 +197,7 @@ impl App {
             speed: 1,
             link_start: None,
             create_preset: CreatePreset::new(),
+            shortcut_placer: None,
         }
     }
 
@@ -195,8 +208,9 @@ impl App {
         let CreatePreset {
             name,
             color,
-            category,
+            cat,
             combinational,
+            ..
         } = create_preset;
 
         if combinational {
@@ -204,8 +218,7 @@ impl App {
         }
 
         let chip = preset::chip::Chip::from_scene(&name, color, &self.scene);
-        self.presets
-            .add_preset(category, preset::DeviceData::Chip(chip));
+        self.presets.add_preset(cat, preset::DeviceData::Chip(chip));
         self.scene = scene::Scene::new();
     }
 
@@ -234,21 +247,67 @@ impl eframe::App for App {
                 if ui.button("Create Preset").clicked() {
                     self.create();
                 }
+                ui.separator();
 
-                ui.label("name: ");
-                ui.text_edit_singleline(&mut self.create_preset.name);
+                let name = self
+                    .presets
+                    .get_cat(self.create_preset.cat)
+                    .unwrap()
+                    .to_owned();
+                ui.menu_button(format!("category: {name}"), |ui| {
+                    let mut choose_cat = None;
 
-                ui.label("color: ");
+                    const LEFT_SP: f32 = 15.0;
+
+                    let mut del_cat = None;
+
+                    for (cat_id, cat_name) in self.presets.get_categories() {
+                        ui.horizontal(|ui| {
+                            ui.add_space(LEFT_SP);
+                            let cat_button = ui.button(cat_name);
+                            if cat_button.clicked() {
+                                choose_cat = Some(cat_id);
+                                ui.close_menu();
+                            }
+                            if pressed_del && cat_button.hovered() {
+                                del_cat = Some(cat_id);
+                            }
+                        });
+                    }
+
+                    if let Some(cat_id) = del_cat && self.presets.get_categories().len() > 1 {
+                        self.presets.remove_cat(cat_id);
+                    }
+
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.text_edit_singleline(&mut self.create_preset.new_cat_name);
+                        let add_button = ui.button("+");
+                        if add_button.clicked() {
+                            self.presets
+                                .add_category(self.create_preset.new_cat_name.clone());
+                            self.create_preset.new_cat_name = String::new();
+                        }
+                        add_button.on_hover_text("New Preset Category");
+                        ui.add_space(5.0);
+                    });
+                    ui.add_space(5.0);
+
+                    if let Some(id) = choose_cat {
+                        self.create_preset.cat = id;
+                    }
+                });
+
                 ui.color_edit_button_rgb(&mut self.create_preset.color);
-
-                ui.label("combinational: ");
-                ui.checkbox(&mut self.create_preset.combinational, "");
+                ui.text_edit_singleline(&mut self.create_preset.name);
+                ui.checkbox(&mut self.create_preset.combinational, "combinational");
             });
         });
 
         TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Sim: ");
+                ui.heading("Sim");
+                ui.separator();
 
                 let pause_unpause_txt = if self.paused { "unpause" } else { "pause" };
                 let pause_response = ui.button(pause_unpause_txt);
@@ -271,7 +330,7 @@ impl eframe::App for App {
                     println!("scene: {}\n", good_debug(&self.scene));
                 }
                 if ui.button("debug presets").clicked() {
-                    todo!()
+                    println!("presets: {}\n", good_debug(&self.presets));
                 }
             });
         });
@@ -446,6 +505,79 @@ impl eframe::App for App {
 
                     painter.extend(shapes);
                 });
+
+                let pressed_num: Option<usize> = match () {
+                    _ if ctx.input().key_pressed(Key::Num0) => Some(0),
+                    _ if ctx.input().key_pressed(Key::Num1) => Some(1),
+                    _ if ctx.input().key_pressed(Key::Num2) => Some(2),
+                    _ if ctx.input().key_pressed(Key::Num3) => Some(3),
+                    _ if ctx.input().key_pressed(Key::Num4) => Some(4),
+                    _ if ctx.input().key_pressed(Key::Num5) => Some(5),
+                    _ if ctx.input().key_pressed(Key::Num6) => Some(6),
+                    _ if ctx.input().key_pressed(Key::Num7) => Some(7),
+                    _ if ctx.input().key_pressed(Key::Num8) => Some(8),
+                    _ if ctx.input().key_pressed(Key::Num9) => Some(9),
+                    _ => None,
+                };
+                if ctx.input().key_pressed(Key::Escape) {
+                    self.shortcut_placer = None;
+                }
+                if let Some(pressed_num) = pressed_num {
+                    if let Some(shortcut_placer) = &self.shortcut_placer {
+                        if let Some(cat) = shortcut_placer.cat {
+                            if let Some(preset_id) = self
+                                .presets
+                                .get_cat_presets(cat)
+                                .iter()
+                                .nth(pressed_num)
+                                .map(|(id, _)| *id)
+                            {
+                                self.place_preset(preset_id, shortcut_placer.pos);
+                                self.shortcut_placer = None;
+                            }
+                        }
+                    } else {
+                        let cat = self
+                            .presets
+                            .get_categories()
+                            .iter()
+                            .nth(pressed_num)
+                            .map(|(id, _)| *id);
+                        if cat.is_some() {
+                            self.shortcut_placer = Some(ShortcutPlacer {
+                                pos: pointer_pos,
+                                cat,
+                            });
+                        }
+                    }
+                }
+                if let Some(ShortcutPlacer { pos, cat }) = self.shortcut_placer.clone() {
+                    let mut child_ui = ui.child_ui(
+                        Rect::from_min_size(pos, Vec2::new(300.0, 300.0)),
+                        ui.layout().clone(),
+                    );
+                    const SP: f32 = 20.0;
+                    if let Some(cat) = cat {
+                        child_ui.set_width(80.0);
+                        child_ui.separator();
+                        for (idx, (_, preset)) in
+                            self.presets.get_cat_presets(cat).iter().enumerate()
+                        {
+                            child_ui.horizontal(|ui| {
+                                ui.add_space(SP);
+                                ui.label(format!("{} - {}", idx, preset.name()));
+                            });
+                        }
+                        child_ui.separator();
+                    } else {
+                        for (_, cat_name) in &self.presets.get_categories() {
+                            child_ui.horizontal(|ui| {
+                                ui.add_space(SP);
+                                ui.label(cat_name);
+                            });
+                        }
+                    }
+                }
             })
             .response
             .interact(Sense::click_and_drag());
@@ -459,6 +591,7 @@ impl eframe::App for App {
         }
 
         response.context_menu(|ui| {
+            ui.set_width(80.0);
             let Some(pos) = ctx.input().pointer.interact_pos() else {return };
 
             const LEFT_SP: f32 = 15.0;
@@ -468,33 +601,21 @@ impl eframe::App for App {
             let mut place_preset = None;
             let mut del_preset = None;
 
-            for (cat_id, presets) in self.presets.get_sorted() {
-                let cat_name = self.presets.get_category_name(*cat_id).unwrap();
-                ui.horizontal(|ui| {
-                    ui.add_space(LEFT_SP);
-                    ui.label(RichText::new(cat_name).strong());
+            for (cat_id, cat_name) in self.presets.get_categories() {
+                ui.menu_button(cat_name, |ui| {
+                    for (preset_id, preset) in self.presets.get_cat_presets(cat_id) {
+                        ui.horizontal(|ui| {
+                            let button = Button::new(preset.name()).ui(ui);
+                            if button.clicked() {
+                                place_preset = Some(preset_id);
+                                ui.close_menu();
+                            }
+                            if button.hovered() && pressed_del {
+                                del_preset = Some(preset_id);
+                            }
+                        });
+                    }
                 });
-                ui.separator();
-                ui.add_space(5.0);
-                for preset_id in presets {
-                    let preset = self.presets.get_preset(*preset_id).unwrap();
-                    ui.horizontal(|ui| {
-                        ui.add_space(LEFT_SP);
-
-                        let stroke = Stroke {
-                            width: 2.0,
-                            color: preset.color().unwrap_or(Color32::WHITE),
-                        };
-                        let button = Button::new(preset.name()).stroke(stroke).ui(ui);
-                        if button.clicked() {
-                            place_preset = Some(*preset_id);
-                            ui.close_menu();
-                        }
-                        if button.hovered() && pressed_del {
-                            del_preset = Some(*preset_id);
-                        }
-                    });
-                }
             }
 
             if let Some(id) = place_preset {
