@@ -256,7 +256,12 @@ pub fn show_device(
         }
     };
 
-    let color = preset.color().unwrap_or(Color32::WHITE);
+    let color = preset.color().unwrap_or([1.0; 3]);
+    let color = Color32::from_rgb(
+        (color[0] * 255.0) as u8,
+        (color[1] * 255.0) as u8,
+        (color[2] * 255.0) as u8,
+    );
     let rounding = Rounding::same(3.0);
 
     ctx.shapes.push(Shape::rect_filled(rect, rounding, color));

@@ -1,5 +1,3 @@
-#![feature(never_type)]
-#![feature(exhaustive_patterns)]
 #![feature(let_chains)]
 
 // TODO allow for changing IoLabel's in scene inputs/outputs
@@ -14,10 +12,11 @@ pub mod scene;
 
 use debug::good_debug;
 use eframe::egui::*;
+use serde_derive::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SimId(u32);
 impl SimId {
     pub fn new() -> Self {
@@ -30,7 +29,7 @@ impl Hash for SimId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BitField(pub u64);
 impl BitField {
     pub fn set(&mut self, pos: usize, state: bool) {
@@ -49,7 +48,7 @@ impl BitField {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TruthTable {
     pub num_inputs: usize,
     pub num_outputs: usize,
@@ -69,7 +68,7 @@ pub trait IoAccess<T> {
     fn num_inputs(&self) -> usize;
     fn num_outputs(&self) -> usize;
 }
-impl<T> IoAccess<T> for ! {
+impl<T> IoAccess<T> for () {
     fn get_input(&self, _input: usize) -> T {
         unreachable!()
     }
@@ -85,7 +84,7 @@ impl<T> IoAccess<T> for ! {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum LinkTarget<T> {
     DeviceInput(T, usize),
     Output(T),
@@ -96,7 +95,7 @@ pub enum LinkStart<T> {
     Input(T),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DeviceData<S, C, G> {
     CombGate(G),
     Chip(C),
@@ -306,7 +305,7 @@ impl eframe::App for App {
 
         TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Sim");
+                ui.heading("sim");
                 ui.separator();
 
                 let pause_unpause_txt = if self.paused { "unpause" } else { "pause" };
@@ -331,6 +330,17 @@ impl eframe::App for App {
                 }
                 if ui.button("debug presets").clicked() {
                     println!("presets: {}\n", good_debug(&self.presets));
+                }
+
+                let home = std::env::var("HOME").unwrap_or("/".to_owned());
+                let save_path = format!("{}/Desktop/logic-sim-presets", home);
+                if ui.button("save presets").clicked() {
+                    let bytes: Vec<u8> = bincode::serialize(&self.presets).unwrap();
+                    std::fs::write(&save_path, &bytes).unwrap();
+                }
+                if ui.button("load presets").clicked() {
+                    let bytes = std::fs::read(&save_path).unwrap();
+                    self.presets = bincode::deserialize(&bytes).unwrap();
                 }
             });
         });

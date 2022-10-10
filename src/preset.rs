@@ -1,10 +1,10 @@
 pub mod chip;
 
 use crate::{BitField, SimId, TruthTable};
-use eframe::egui::Color32;
+use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
 pub struct IoLabel {
     pub name: String,
     pub implicit: bool,
@@ -34,10 +34,10 @@ impl IoLabel {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CombGate {
     pub name: String,
-    pub color: Color32,
+    pub color: [f32; 3],
     pub inputs: Vec<IoLabel>,
     pub outputs: Vec<IoLabel>,
     pub table: TruthTable,
@@ -96,7 +96,7 @@ impl DeviceData {
         }
     }
 
-    pub fn color(&self) -> Option<Color32> {
+    pub fn color(&self) -> Option<[f32; 3]> {
         match self {
             Self::CombGate(e) => Some(e.color.clone()),
             Self::Chip(e) => Some(e.color.clone()),
@@ -130,10 +130,12 @@ impl DeviceData {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Preset {
     pub category: SimId,
     pub device: DeviceData,
 }
+#[derive(Serialize, Deserialize)]
 pub struct Presets {
     categories: HashMap<SimId, String>,
     next_category_id: SimId,
@@ -241,7 +243,7 @@ impl Presets {
 pub fn and_gate() -> CombGate {
     CombGate {
         name: String::from("And"),
-        color: Color32::BLUE,
+        color: [1.0, 0.0, 0.0],
         inputs: vec![IoLabel::implicit("a"), IoLabel::implicit("b")],
         outputs: vec![IoLabel::implicit_output()],
         table: TruthTable {
@@ -259,7 +261,7 @@ pub fn and_gate() -> CombGate {
 pub fn not_gate() -> CombGate {
     CombGate {
         name: String::from("Not"),
-        color: Color32::GREEN,
+        color: [0.0, 1.0, 0.0],
         inputs: vec![IoLabel::implicit_input()],
         outputs: vec![IoLabel::implicit_output()],
         table: TruthTable {
@@ -276,7 +278,7 @@ pub fn not_gate() -> CombGate {
 pub fn nand_gate() -> CombGate {
     CombGate {
         name: String::from("Nand"),
-        color: Color32::TEMPORARY_COLOR,
+        color: [0.0, 0.0, 1.0],
         inputs: vec![IoLabel::implicit("a"), IoLabel::implicit("b")],
         outputs: vec![IoLabel::implicit_output()],
         table: TruthTable {
@@ -294,7 +296,7 @@ pub fn nand_gate() -> CombGate {
 pub fn nor_gate() -> CombGate {
     CombGate {
         name: String::from("Nor"),
-        color: Color32::YELLOW,
+        color: [1.0, 1.0, 0.0],
         inputs: vec![IoLabel::implicit("a"), IoLabel::implicit("b")],
         outputs: vec![IoLabel::implicit_output()],
         table: TruthTable {
@@ -312,7 +314,7 @@ pub fn nor_gate() -> CombGate {
 pub fn or_gate() -> CombGate {
     CombGate {
         name: String::from("Or"),
-        color: Color32::RED,
+        color: [0.0, 1.0, 1.0],
         inputs: vec![IoLabel::implicit("a"), IoLabel::implicit("b")],
         outputs: vec![IoLabel::implicit_output()],
         table: TruthTable {

@@ -1,7 +1,8 @@
 use super::IoLabel;
 use crate::scene::{self, Scene};
 use crate::{LinkTarget, SimId};
-use eframe::egui::{Color32, Pos2};
+use eframe::egui::Pos2;
+use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug)]
 pub struct UnnestedChip {
@@ -127,6 +128,7 @@ impl<'a> Unnester<'a> {
                     scene::chip::DeviceData::CombGate(e) => scene::DeviceData::CombGate(e.clone()),
                     scene::chip::DeviceData::Light(e) => scene::DeviceData::Light(*e),
                     scene::chip::DeviceData::Switch(e) => scene::DeviceData::Switch(*e),
+                    scene::chip::DeviceData::Chip(_) => unreachable!(),
                 };
 
                 let num_outputs = device.data.num_outputs();
@@ -200,41 +202,36 @@ impl<'a> Unnester<'a> {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Deserialize, Serialize)]
 pub struct Input {
     pub label: IoLabel,
     pub links: Vec<LinkTarget<usize>>,
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Deserialize, Serialize)]
 pub struct Output {
     pub label: IoLabel,
 }
 
-pub type DeviceData = crate::DeviceData<(), !, SimId>;
-#[derive(Debug, Clone)]
+pub type DeviceData = crate::DeviceData<(), (), SimId>;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Device {
     pub preset: SimId,
     pub data: DeviceData,
     pub links: Vec<Vec<LinkTarget<usize>>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Chip {
     pub name: String,
-    pub color: Color32,
+    pub color: [f32; 3],
     pub inputs: Vec<Input>,
     pub outputs: Vec<Output>,
     pub devices: Vec<Device>,
 }
 impl Chip {
     pub fn from_scene(name: &str, color: [f32; 3], scene: &scene::Scene) -> Self {
-        let color = Color32::from_rgb(
-            (color[0] * 255.0) as u8,
-            (color[1] * 255.0) as u8,
-            (color[2] * 255.0) as u8,
-        );
-
         let mut scene = scene.clone();
 
         let mut unnester = Unnester::new(&mut scene);

@@ -123,7 +123,6 @@ macro_rules! debug_as_good_debug {
 	};
 }
 debug_as_good_debug!(
-    !,
     String,
     bool,
     [f32; 3],

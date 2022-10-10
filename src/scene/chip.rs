@@ -8,13 +8,14 @@ pub struct Device {
     // DeviceData::CombGate is illegal
     pub data: DeviceData,
 }
-pub type DeviceData = crate::DeviceData<bool, !, CombGate>;
+pub type DeviceData = crate::DeviceData<bool, (), CombGate>;
 impl DeviceData {
     pub fn write_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
         match self {
             Self::CombGate(e) => e.write_input(input, state, set_outputs),
             Self::Light(e) => *e = state,
             Self::Switch(_) => panic!("a switch doesnt have inputs"),
+            Self::Chip(_) => unreachable!(),
         }
     }
 }
