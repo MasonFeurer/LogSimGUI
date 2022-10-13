@@ -1,30 +1,35 @@
 use super::{CombGate, SetOutput};
-use crate::{preset, BitField, LinkTarget, SimId};
+use crate::{preset, BitField, IntId, LinkTarget, WithLinks};
+
+#[derive(Debug, Clone)]
+pub enum DeviceData {
+    CombGate(CombGate),
+}
+impl DeviceData {
+    pub fn set_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
+        match self {
+            Self::CombGate(e) => e.set_input(input, state, set_outputs),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Device {
-    pub preset: SimId,
+    pub preset: IntId,
     pub links: Vec<Vec<LinkTarget<usize>>>,
-    // DeviceData::CombGate is illegal
     pub data: DeviceData,
 }
-pub type DeviceData = crate::DeviceData<bool, (), CombGate>;
-impl DeviceData {
-    pub fn write_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
-        match self {
-            Self::CombGate(e) => e.write_input(input, state, set_outputs),
-            Self::Light(e) => *e = state,
-            Self::Switch(_) => panic!("a switch doesnt have inputs"),
-            Self::Chip(_) => unreachable!(),
-        }
-    }
+
+#[derive(Debug, Clone)]
+pub struct Io {
+    pub state: bool,
 }
 
 #[derive(Default, Debug, Clone)]
 pub struct Chip {
     pub writes: Vec<Write>,
-    pub inputs: Vec<Input>,
-    pub outputs: Vec<Output>,
+    pub inputs: Vec<WithLinks<Io, usize>>,
+    pub outputs: Vec<Io>,
     pub devices: Vec<Device>,
 }
 impl Chip {
@@ -32,44 +37,34 @@ impl Chip {
         let inputs = preset
             .inputs
             .iter()
-            .map(|input| Input {
-                state: false,
-                links: input.links.clone(),
-            })
+            .map(|input| input.map_item(|_| Io { state: false }))
             .collect();
-        let outputs = preset
-            .outputs
-            .iter()
-            .map(|_| Output { state: false })
-            .collect();
+        let outputs = preset.outputs.iter().map(|_| Io { state: false }).collect();
 
         let mut writes = Vec::new();
         let mut devices = Vec::new();
+
         for device in &preset.devices {
             let device_preset = presets.get_preset(device.preset).unwrap();
             let data = match device_preset {
-                preset::DeviceData::CombGate(e) => {
-                    let output = e.table.get(BitField(0));
+                preset::Preset::CombGate(e) => {
+                    let output = e.table.get(BitField::single(0));
+                    // for any gate output that is on, queue a write for the links
                     for i in 0..e.table.num_outputs {
-                        if output.get(i) {
-                            writes.extend(
-                                device.links[i]
-                                    .iter()
-                                    .map(|link| Write::new(link.clone(), true)),
-                            );
+                        if !output.get(i) {
+                            continue;
                         }
+                        writes.extend(device.links[i as usize].iter().map(Write::new_on));
                     }
 
                     DeviceData::CombGate(CombGate {
                         preset: device.preset,
-                        input: BitField(0),
+                        input: BitField::single(0),
                         output,
                         table: e.table.clone(),
                     })
                 }
-                preset::DeviceData::Chip(_) => panic!("a chip preset shouldn't contain a chip"),
-                preset::DeviceData::Light(_) => DeviceData::Light(false),
-                preset::DeviceData::Switch(_) => DeviceData::Switch(false),
+                _ => unreachable!(),
             };
             devices.push(Device {
                 preset: device.preset,
@@ -86,14 +81,14 @@ impl Chip {
         }
     }
 
-    pub fn update_link(
+    pub fn set_link_target(
         &mut self,
-        link: LinkTarget<usize>,
+        target: LinkTarget<usize>,
         state: bool,
         set_outputs: &mut Vec<SetOutput>,
-        writes: &mut Vec<Write>,
     ) {
-        match link {
+        // `set_outputs`: outputs of *this chip* that were set by this link
+        match target {
             LinkTarget::Output(output) => {
                 set_outputs.push(SetOutput { output, state });
                 self.outputs[output].state = state;
@@ -101,69 +96,63 @@ impl Chip {
             LinkTarget::DeviceInput(device, input) => {
                 let device = &mut self.devices[device];
 
-                let mut device_set_outputs = Vec::new();
-                device
-                    .data
-                    .write_input(input, state, &mut device_set_outputs);
+                // these `new_set_outputs` are not outputs of this chip
+                // so they are not pushed to `set_outputs`.
+                // they are instead stored as writes, to be handled next update
+                let mut new_set_outputs = Vec::new();
+                device.data.set_input(input, state, &mut new_set_outputs);
 
-                for set_output in device_set_outputs {
-                    for link in device.links[set_output.output].clone() {
-                        writes.push(Write::new(link, set_output.state));
+                for SetOutput { output, state } in new_set_outputs {
+                    for target in device.links[output].clone() {
+                        self.writes.push(Write::new(target, state));
                     }
                 }
             }
         }
     }
 
-    pub fn write_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
-        if self.inputs[input].state == state {
-            return;
-        }
+    pub fn set_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
+        self.inputs[input].item.state = state;
 
-        self.inputs[input].state = state;
-
-        let mut new_writes = Vec::new();
         for link in self.inputs[input].links.clone() {
-            self.update_link(link, state, set_outputs, &mut new_writes);
+            self.set_link_target(link, state, set_outputs);
         }
-        self.writes.extend(new_writes);
     }
 
     pub fn update(&mut self, set_outputs: &mut Vec<SetOutput>) {
+        // most writes will have a delay > 0,
+        // so it's more efficient to allocate space for them all here
         let mut writes = Vec::with_capacity(self.writes.len());
 
         std::mem::swap(&mut writes, &mut self.writes);
-
-        let mut new_writes = Vec::new();
 
         for write in writes {
             if write.delay > 0 {
                 self.writes.push(write.dec_delay());
                 continue;
             }
-
-            self.update_link(write.target, write.state, set_outputs, &mut new_writes);
+            self.set_link_target(write.target, write.state, set_outputs);
         }
-        self.writes.extend(new_writes);
     }
 }
-impl crate::IoAccess<bool> for Chip {
+/// GETTERS
+impl Chip {
     #[inline(always)]
-    fn num_inputs(&self) -> usize {
+    pub fn num_inputs(&self) -> usize {
         self.inputs.len()
     }
     #[inline(always)]
-    fn num_outputs(&self) -> usize {
+    pub fn num_outputs(&self) -> usize {
         self.outputs.len()
     }
 
     #[inline(always)]
-    fn get_input(&self, input: usize) -> bool {
-        self.inputs[input].state
+    pub fn get_input(&self, input: usize) -> Option<bool> {
+        Some(self.inputs.get(input)?.item.state)
     }
     #[inline(always)]
-    fn get_output(&self, output: usize) -> bool {
-        self.outputs[output].state
+    pub fn get_output(&self, output: usize) -> Option<bool> {
+        Some(self.outputs.get(output)?.state)
     }
 }
 
@@ -182,6 +171,12 @@ impl Write {
             state,
         }
     }
+
+    #[inline(always)]
+    pub fn new_on(target: &LinkTarget<usize>) -> Self {
+        Self::new(target.clone(), true)
+    }
+
     #[inline(always)]
     pub fn dec_delay(&self) -> Self {
         Self {
@@ -190,14 +185,4 @@ impl Write {
             state: self.state,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct Input {
-    pub state: bool,
-    pub links: Vec<LinkTarget<usize>>,
-}
-#[derive(Debug, Clone)]
-pub struct Output {
-    pub state: bool,
 }

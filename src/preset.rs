@@ -1,156 +1,148 @@
 pub mod chip;
 
-use crate::{BitField, SimId, TruthTable};
-use serde_derive::{Deserialize, Serialize};
+use crate::{BitField, Color, IntId, TruthTable};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Default, Clone, Debug, Deserialize, Serialize)]
-pub struct IoLabel {
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Io {
+    pub y_pos: f32, // normalized
+    pub width: u8,
     pub name: String,
     pub implicit: bool,
 }
-impl IoLabel {
-    #[inline(always)]
-    pub fn implicit_input() -> Self {
+impl Io {
+    pub fn default_at(y_pos: f32) -> Self {
         Self {
-            name: String::from("input"),
-            implicit: true,
+            y_pos,
+            width: 1,
+            name: String::new(),
+            implicit: false,
         }
     }
-    #[inline(always)]
-    pub fn implicit_output() -> Self {
-        Self {
-            name: String::from("output"),
-            implicit: true,
-        }
-    }
+    pub fn from_names(implicit: bool, names: &[&str]) -> Vec<Self> {
+        let mut result = Vec::with_capacity(names.len());
+        let y_step = 1.0_f32 / (names.len() + 1) as f32;
+        let mut y_pos = y_step;
 
-    #[inline(always)]
-    pub fn implicit(name: &str) -> Self {
-        Self {
-            name: String::from(name),
-            implicit: true,
+        for name in names {
+            result.push(Self {
+                y_pos,
+                width: 1,
+                name: String::from(*name),
+                implicit,
+            });
+            y_pos += y_step;
         }
+        result
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CombGate {
     pub name: String,
-    pub color: [f32; 3],
-    pub inputs: Vec<IoLabel>,
-    pub outputs: Vec<IoLabel>,
+    pub color: Color,
+    pub inputs: Vec<Io>,
+    pub outputs: Vec<Io>,
     pub table: TruthTable,
-}
-impl<'a> crate::IoAccess<()> for CombGate {
-    #[inline(always)]
-    fn num_inputs(&self) -> usize {
-        self.table.num_inputs
-    }
-    #[inline(always)]
-    fn num_outputs(&self) -> usize {
-        self.table.num_outputs
-    }
-
-    #[inline(always)]
-    fn get_input(&self, input: usize) -> () {
-        assert!(input < self.inputs.len());
-        ()
-    }
-    #[inline(always)]
-    fn get_output(&self, output: usize) -> () {
-        assert!(output < self.outputs.len());
-        ()
-    }
 }
 impl CombGate {
     #[inline(always)]
-    pub fn get_input_label(&self, input: usize) -> &IoLabel {
-        &self.inputs[input]
+    fn num_inputs(&self) -> usize {
+        self.table.num_inputs as usize
     }
     #[inline(always)]
-    pub fn get_output_label(&self, output: usize) -> &IoLabel {
-        &self.outputs[output]
+    fn num_outputs(&self) -> usize {
+        self.table.num_outputs as usize
+    }
+
+    #[inline(always)]
+    fn get_input(&self, input: usize) -> Option<&Io> {
+        self.inputs.get(input)
+    }
+    #[inline(always)]
+    fn get_output(&self, output: usize) -> Option<&Io> {
+        self.outputs.get(output)
     }
 }
 
-pub type DeviceData = crate::DeviceData<(), chip::Chip, CombGate>;
-impl DeviceData {
-    pub fn size(&self) -> (f32, f32) {
-        use crate::graphics::{DEVICE_IO_SIZE, DEVICE_IO_SP};
-
-        let width = 40.0;
-        let height = std::cmp::max(self.num_inputs(), self.num_outputs()) as f32
-            * (DEVICE_IO_SIZE.y + DEVICE_IO_SP)
-            + DEVICE_IO_SP;
-
-        (width, height)
-    }
-
+#[derive(Serialize, Deserialize)]
+pub enum Preset {
+    CombGate(CombGate),
+    Chip(chip::Chip),
+}
+impl Preset {
     pub fn name(&self) -> &str {
         match self {
             Self::CombGate(e) => &e.name,
             Self::Chip(e) => &e.name,
-            Self::Light(_) => "Light",
-            Self::Switch(_) => "Switch",
         }
     }
 
-    pub fn color(&self) -> Option<[f32; 3]> {
+    pub fn color(&self) -> &Color {
         match self {
-            Self::CombGate(e) => Some(e.color.clone()),
-            Self::Chip(e) => Some(e.color.clone()),
-            Self::Light(_) => None,
-            Self::Switch(_) => None,
+            Self::CombGate(e) => &e.color,
+            Self::Chip(e) => &e.color,
         }
     }
-}
-impl DeviceData {
-    pub fn get_input_label(&self, input: usize) -> IoLabel {
+
+    pub fn num_inputs(&self) -> usize {
         match self {
-            Self::CombGate(e) => e.get_input_label(input).clone(),
-            Self::Chip(e) => e.inputs[input].label.clone(),
-            Self::Light(_) => {
-                assert_eq!(input, 0);
-                IoLabel::implicit_input()
-            }
-            Self::Switch(_) => panic!("a switch doesnt have an input"),
+            Self::CombGate(e) => e.num_inputs(),
+            Self::Chip(e) => e.num_inputs(),
         }
     }
-    pub fn get_output_label(&self, output: usize) -> IoLabel {
+    pub fn num_outputs(&self) -> usize {
         match self {
-            Self::CombGate(e) => e.get_output_label(output).clone(),
-            Self::Chip(e) => e.outputs[output].label.clone(),
-            Self::Switch(_) => {
-                assert_eq!(output, 0);
-                IoLabel::implicit_output()
-            }
-            Self::Light(_) => panic!("a light doesnt have an output"),
+            Self::CombGate(e) => e.num_outputs(),
+            Self::Chip(e) => e.num_outputs(),
         }
+    }
+
+    pub fn get_input(&self, input: usize) -> Option<&Io> {
+        match self {
+            Self::CombGate(e) => e.get_input(input),
+            Self::Chip(e) => e.get_input(input),
+        }
+    }
+    pub fn get_output(&self, output: usize) -> Option<&Io> {
+        match self {
+            Self::CombGate(e) => e.get_output(output),
+            Self::Chip(e) => e.get_output(output),
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_input_loc(&self, input: usize) -> Option<f32> {
+        Some(self.get_input(input)?.y_pos)
+    }
+    #[inline(always)]
+    pub fn get_output_loc(&self, output: usize) -> Option<f32> {
+        Some(self.get_output(output)?.y_pos)
     }
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Preset {
-    pub category: SimId,
-    pub device: DeviceData,
+pub struct CatPreset {
+    pub cat: IntId,
+    pub preset: Preset,
 }
 #[derive(Serialize, Deserialize)]
 pub struct Presets {
-    categories: HashMap<SimId, String>,
-    next_category_id: SimId,
+    pub cats: HashMap<IntId, String>,
+    pub next_cat_id: IntId,
 
-    presets: HashMap<SimId, Preset>,
-    next_preset_id: SimId,
+    pub presets: HashMap<IntId, CatPreset>,
+    pub next_preset_id: IntId,
 }
 impl Presets {
     pub fn new() -> Self {
         Self {
-            categories: HashMap::new(),
-            next_category_id: SimId(0),
+            cats: HashMap::new(),
+            next_cat_id: IntId(0),
 
             presets: HashMap::new(),
-            next_preset_id: SimId(0),
+            next_preset_id: IntId(0),
         }
     }
     pub fn defaults() -> Self {
@@ -159,35 +151,35 @@ impl Presets {
         new
     }
 
-    pub fn get_preset(&self, id: SimId) -> Option<&DeviceData> {
-        self.presets.get(&id).map(|e| &e.device)
+    pub fn get_preset(&self, id: IntId) -> Option<&Preset> {
+        self.presets.get(&id).map(|e| &e.preset)
     }
-    pub fn get_cat(&self, id: SimId) -> Option<&str> {
-        self.categories.get(&id).map(String::as_str)
+    pub fn get_comb_gate(&self, id: IntId) -> Option<&CombGate> {
+        if let Some(preset) = self.get_preset(id) {
+            if let Preset::CombGate(comb_gate) = preset {
+                Some(comb_gate)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn get_cat(&self, id: IntId) -> Option<&str> {
+        self.cats.get(&id).map(String::as_str)
     }
 
-    pub fn add_preset(&mut self, category: SimId, device: DeviceData) -> SimId {
-        let id = self.next_preset_id;
-        self.next_preset_id = SimId(id.0 + 1);
-        self.presets.insert(id, Preset { category, device });
+    pub fn add_preset(&mut self, cat: IntId, preset: Preset) -> IntId {
+        let id = self.next_preset_id.get_inc();
+        self.presets.insert(id, CatPreset { cat, preset });
         id
     }
-    pub fn add_presets(&mut self, category: SimId, devices: &[DeviceData]) -> Vec<SimId> {
-        let mut ids = Vec::with_capacity(devices.len());
-        for device in devices.iter().cloned() {
-            let id = self.next_preset_id;
-            self.next_preset_id = SimId(id.0 + 1);
-            self.presets.insert(id, Preset { category, device });
-            ids.push(id);
-        }
-        ids
-    }
 
-    pub fn remove_cat(&mut self, category: SimId) {
-        self.categories.remove(&category);
+    pub fn remove_cat(&mut self, cat: IntId) {
+        self.cats.remove(&cat);
         let mut remove_presets = Vec::new();
         for (preset_id, preset) in &self.presets {
-            if preset.category == category {
+            if preset.cat == cat {
                 remove_presets.push(*preset_id);
             }
         }
@@ -195,45 +187,43 @@ impl Presets {
             self.presets.remove(&preset);
         }
     }
-    pub fn remove_preset(&mut self, preset: SimId) {
+    pub fn remove_preset(&mut self, preset: IntId) {
         self.presets.remove(&preset);
     }
-    pub fn add_category(&mut self, category: String) -> SimId {
-        let id = self.next_category_id;
-        self.next_category_id = SimId(id.0 + 1);
-        self.categories.insert(id, category);
+    pub fn add_cat(&mut self, cat: String) -> IntId {
+        let id = self.next_cat_id.get_inc();
+        self.cats.insert(id, cat);
         id
     }
 
     pub fn add_defaults(&mut self) {
-        let cat_id = self.add_category("Basic".to_owned());
-        self.add_presets(
-            cat_id,
-            &[
-                DeviceData::CombGate(and_gate()),
-                DeviceData::CombGate(not_gate()),
-                DeviceData::CombGate(nand_gate()),
-                DeviceData::CombGate(nor_gate()),
-                DeviceData::CombGate(or_gate()),
-            ],
-        );
+        let cat_id = self.add_cat("Basic".to_owned());
+        for preset in [
+            Preset::CombGate(and_gate()),
+            Preset::CombGate(not_gate()),
+            Preset::CombGate(nand_gate()),
+            Preset::CombGate(nor_gate()),
+            Preset::CombGate(or_gate()),
+        ] {
+            self.add_preset(cat_id, preset);
+        }
     }
 
     #[inline(always)]
-    pub fn get_categories(&self) -> Vec<(SimId, String)> {
+    pub fn get_cats(&self) -> Vec<(IntId, String)> {
         let mut cats: Vec<_> = self
-            .categories
+            .cats
             .iter()
             .map(|(id, name)| (*id, name.clone()))
             .collect();
         cats.sort_by(|(a_id, _), (b_id, _)| a_id.cmp(&b_id));
         cats
     }
-    pub fn get_cat_presets(&self, cat: SimId) -> Vec<(SimId, &DeviceData)> {
+    pub fn get_cat_presets(&self, cat: IntId) -> Vec<(IntId, &Preset)> {
         let mut result = Vec::new();
         for (preset_id, preset) in &self.presets {
-            if preset.category == cat {
-                result.push((*preset_id, &preset.device));
+            if preset.cat == cat {
+                result.push((*preset_id, &preset.preset));
             }
         }
         result
@@ -243,17 +233,17 @@ impl Presets {
 pub fn and_gate() -> CombGate {
     CombGate {
         name: String::from("And"),
-        color: [1.0, 0.0, 0.0],
-        inputs: vec![IoLabel::implicit("a"), IoLabel::implicit("b")],
-        outputs: vec![IoLabel::implicit_output()],
+        color: Color::from_rgb(255, 0, 0),
+        inputs: Io::from_names(true, &["a", "b"]),
+        outputs: Io::from_names(true, &["out"]),
         table: TruthTable {
             num_inputs: 2,
             num_outputs: 1,
             map: vec![
-                BitField(0), // 00
-                BitField(0), // 01
-                BitField(0), // 10
-                BitField(1), // 11
+                BitField::single(0), // 00
+                BitField::single(0), // 01
+                BitField::single(0), // 10
+                BitField::single(1), // 11
             ],
         },
     }
@@ -261,15 +251,15 @@ pub fn and_gate() -> CombGate {
 pub fn not_gate() -> CombGate {
     CombGate {
         name: String::from("Not"),
-        color: [0.0, 1.0, 0.0],
-        inputs: vec![IoLabel::implicit_input()],
-        outputs: vec![IoLabel::implicit_output()],
+        color: Color::from_rgb(0, 255, 0),
+        inputs: Io::from_names(true, &["in"]),
+        outputs: Io::from_names(true, &["out"]),
         table: TruthTable {
             num_inputs: 1,
             num_outputs: 1,
             map: vec![
-                BitField(1), // 0
-                BitField(0), // 1
+                BitField::single(1), // 0
+                BitField::single(0), // 1
             ],
         },
     }
@@ -278,17 +268,17 @@ pub fn not_gate() -> CombGate {
 pub fn nand_gate() -> CombGate {
     CombGate {
         name: String::from("Nand"),
-        color: [0.0, 0.0, 1.0],
-        inputs: vec![IoLabel::implicit("a"), IoLabel::implicit("b")],
-        outputs: vec![IoLabel::implicit_output()],
+        color: Color::from_rgb(0, 0, 255),
+        inputs: Io::from_names(true, &["a", "b"]),
+        outputs: Io::from_names(true, &["out"]),
         table: TruthTable {
             num_inputs: 2,
             num_outputs: 1,
             map: vec![
-                BitField(1), // 00
-                BitField(1), // 01
-                BitField(1), // 10
-                BitField(0), // 11
+                BitField::single(1), // 00
+                BitField::single(1), // 01
+                BitField::single(1), // 10
+                BitField::single(0), // 11
             ],
         },
     }
@@ -296,17 +286,17 @@ pub fn nand_gate() -> CombGate {
 pub fn nor_gate() -> CombGate {
     CombGate {
         name: String::from("Nor"),
-        color: [1.0, 1.0, 0.0],
-        inputs: vec![IoLabel::implicit("a"), IoLabel::implicit("b")],
-        outputs: vec![IoLabel::implicit_output()],
+        color: Color::from_rgb(255, 255, 0),
+        inputs: Io::from_names(true, &["a", "b"]),
+        outputs: Io::from_names(true, &["out"]),
         table: TruthTable {
             num_inputs: 2,
             num_outputs: 1,
             map: vec![
-                BitField(1), // 00
-                BitField(0), // 01
-                BitField(0), // 10
-                BitField(0), // 11
+                BitField::single(1), // 00
+                BitField::single(0), // 01
+                BitField::single(0), // 10
+                BitField::single(0), // 11
             ],
         },
     }
@@ -314,40 +304,18 @@ pub fn nor_gate() -> CombGate {
 pub fn or_gate() -> CombGate {
     CombGate {
         name: String::from("Or"),
-        color: [0.0, 1.0, 1.0],
-        inputs: vec![IoLabel::implicit("a"), IoLabel::implicit("b")],
-        outputs: vec![IoLabel::implicit_output()],
+        color: Color::from_rgb(0, 255, 255),
+        inputs: Io::from_names(true, &["a", "b"]),
+        outputs: Io::from_names(true, &["out"]),
         table: TruthTable {
             num_inputs: 2,
             num_outputs: 1,
             map: vec![
-                BitField(0), // 00
-                BitField(1), // 01
-                BitField(1), // 10
-                BitField(1), // 11
+                BitField::single(0), // 00
+                BitField::single(1), // 01
+                BitField::single(1), // 10
+                BitField::single(1), // 11
             ],
         },
-    }
-}
-
-use crate::debug::{Fmtter, GoodDebug};
-impl GoodDebug for Preset {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Preset\n");
-        f.indent();
-        f.push_field("category", &self.category);
-        f.push_field("device", &self.device);
-        f.unindent();
-    }
-}
-impl GoodDebug for Presets {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Presets\n");
-        f.indent();
-        f.push_field("categories", &self.categories);
-        f.push_field("next_category_id", &self.next_category_id);
-        f.push_field("presets", &self.presets);
-        f.push_field("next_preset_id", &self.next_preset_id);
-        f.unindent();
     }
 }

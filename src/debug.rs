@@ -6,6 +6,9 @@ pub fn good_debug<T: GoodDebug>(t: &T) -> String {
     t.good_debug(&mut f);
     f.result
 }
+// pub fn good_debug<T>(_: &T) -> &'static str {
+//     "debug umimplemented!"
+// }
 
 pub struct Fmtter {
     pub indent: u8,
@@ -110,7 +113,7 @@ impl<K: Debug, V: GoodDebug> GoodDebug for HashMap<K, V> {
 }
 
 // *** FROM DEBUG DEBUG IMPLS ***
-macro_rules! debug_as_good_debug {
+macro_rules! impl_from_debug {
 	 ($ty:ty) => {
         impl GoodDebug for $ty {
             fn good_debug(&self, f: &mut Fmtter) {
@@ -119,19 +122,23 @@ macro_rules! debug_as_good_debug {
         }
     };
 	($($ty:ty),*$(,)?) => {
-		$(debug_as_good_debug!($ty);)*
+		$(impl_from_debug!($ty);)*
 	};
 }
-debug_as_good_debug!(
-    String,
-    bool,
+impl_from_debug!(
+    [f32; 2],
     [f32; 3],
+    [f32; 4],
+    bool,
     u8,
-    (),
+    u32,
+    f32,
     usize,
-    crate::BitField,
-    crate::SimId,
+    String,
+    crate::IntId,
     eframe::egui::Pos2,
+    eframe::egui::Vec2,
+    eframe::egui::Rect,
     eframe::egui::Color32,
 );
 
@@ -147,231 +154,66 @@ impl<T: Debug> GoodDebug for crate::LinkStart<T> {
     }
 }
 
-impl<S: GoodDebug, C: GoodDebug, G: GoodDebug> GoodDebug for crate::DeviceData<S, C, G> {
-    fn good_debug(&self, f: &mut Fmtter) {
-        match self {
-            Self::CombGate(e) => {
-                f.push_str("DeviceData::CombGate / ");
-                e.good_debug(f);
-            }
-            Self::Chip(e) => {
-                f.push_str("DeviceData::Chip / ");
-                e.good_debug(f);
-            }
-            Self::Light(e) => {
-                f.push_str("DeviceData::Light / ");
-                e.good_debug(f);
-            }
-            Self::Switch(e) => {
-                f.push_str("DeviceData::Switch / ");
-                e.good_debug(f);
+macro_rules! impl_struct {
+    ($($path:tt),*:$name:ident{$($field:ident),*}) => {
+    	impl GoodDebug for $($path::)*$name {
+    		fn good_debug(&self, f: &mut Fmtter) {
+    			f.push_str(concat!(stringify!($name), "\n"));
+    			f.indent();
+    			$(
+    				f.push_field(stringify!($field), &self.$field);
+    			)*
+    			f.unindent();
+    		}
+    	}
+    };
+    ($($path:tt),*:$name:ident<$($t:ident),*> {$($field:ident),*}) => {
+    	impl<$($t: GoodDebug + Debug),*> GoodDebug for $($path::)*$name<$($t),*> {
+    		fn good_debug(&self, f: &mut Fmtter) {
+    			f.push_str(concat!(stringify!($name), "\n"));
+    			f.indent();
+    			$(
+    				f.push_field(stringify!($field), &self.$field);
+    			)*
+    			f.unindent();
+    		}
+    	}
+    };
+}
+macro_rules! impl_enum_1 {
+    ($($path:tt),*:$name:ident {$($var:ident),*}) => {
+        impl GoodDebug for $($path::)*$name {
+            fn good_debug(&self, f: &mut Fmtter) {
+                f.push_str(concat!(stringify!($name), "::"));
+                match self {
+                	$(Self::$var(e) => e.good_debug(f),)*
+                }
             }
         }
-    }
+    };
 }
 
-impl GoodDebug for crate::TruthTable {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("TruthTable\n");
-        f.indent();
-        f.push_field("num_inputs", &self.num_inputs);
-        f.push_field("num_outputs", &self.num_outputs);
-        f.push_field("map", &self.map);
-        f.unindent();
-    }
-}
+impl_struct!(crate:BitField { len, data });
+impl_struct!(crate:TruthTable { num_inputs, num_outputs, map });
+impl_struct!(crate:WithLinks<T, L> { item, links });
 
-impl GoodDebug for crate::scene::Scene {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Scene\n");
-        f.indent();
-        f.push_field("inputs", &self.inputs);
-        f.push_field("outputs", &self.outputs);
-        f.push_field("devices", &self.devices);
-        f.push_last_field("writes", &self.writes);
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::scene::Input {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Input\n");
-        f.indent();
-        f.push_field("label", &self.label);
-        f.push_field("state", &self.state);
-        f.push_last_field("links", &self.links);
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::scene::Output {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Output\n");
-        f.indent();
-        f.push_field("label", &self.label);
-        f.push_last_field("state", &self.state);
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::scene::Device {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Device\n");
-        f.indent();
-        f.push_field("preset", &self.preset);
-        f.push_field("pos", &self.pos);
-        f.push_field("data", &self.data);
-        f.push_last_field("links", &self.links);
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::scene::Write {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Write\n");
-        f.indent();
-        f.push_field("target", &self.target);
-        f.push_last_field("state", &self.state);
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::scene::CombGate {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("CombGate\n");
-        f.indent();
-        f.push_field("preset", &self.preset);
-        f.push_field("input", &self.input);
-        f.push_field("output", &self.output);
-        f.push_last_field("table", &self.table);
-        f.unindent();
-    }
-}
+impl_struct!(crate,preset:Io { y_pos, width, name, implicit });
+impl_struct!(crate,preset:CombGate { name, color, inputs, outputs, table });
+impl_enum_1!(crate,preset:Preset { CombGate, Chip });
+impl_struct!(crate,preset:CatPreset { cat, preset });
+impl_struct!(crate,preset:Presets { cats, next_cat_id, presets, next_preset_id });
+impl_struct!(crate,preset,chip:Chip { name, color, inputs, outputs, devices });
+impl_struct!(crate,preset,chip:Device { preset, links });
 
-impl GoodDebug for crate::scene::chip::Chip {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Chip\n");
-        f.indent();
-        f.push_field("writes", &self.writes);
-        f.push_field("inputs", &self.inputs);
-        f.push_field("outputs", &self.outputs);
-        f.push_last_field("devices", &self.devices);
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::scene::chip::Input {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Input\n");
-        f.indent();
-        f.push_field("state", &self.state);
-        f.push_last_field("links", &self.links);
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::scene::chip::Output {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Output / ");
-        self.state.good_debug(f);
-    }
-}
-impl GoodDebug for crate::scene::chip::Device {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Device\n");
-        f.indent();
-        f.push_field("preset", &self.preset);
-        f.push_field("links", &self.links);
-        f.push_last_field("data", &self.data);
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::scene::chip::Write {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Write\n");
-        f.indent();
-        f.push_field("delay", &self.delay);
-        f.push_field("target", &self.target);
-        f.push_field("state", &self.state);
-        f.unindent();
-    }
-}
+impl_struct!(crate,scene:Write { target, state });
+impl_enum_1!(crate,scene:DeviceData { CombGate, Chip });
+impl_struct!(crate,scene:Device { preset, pos, data, links });
+impl_struct!(crate,scene:CombGate { preset, input, output, table });
+impl_struct!(crate,scene:Io { preset, state });
+impl_struct!(crate,scene:Scene { rect, inputs, outputs, devices, writes });
 
-impl GoodDebug for crate::preset::chip::UnnestedChip {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("UnnestedChip\n");
-        f.indent();
-        f.push_field("id", &self.id);
-        f.push_field("chip", &self.chip);
-        f.push_field("output_links", &self.output_links);
-        f.push_last_field("device_ids", &self.device_ids);
-        f.unindent();
-    }
-}
-impl<'a> GoodDebug for crate::preset::chip::Unnester<'a> {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Unnester\n");
-        f.indent();
-
-        f.push_field("scene", self.scene);
-        f.push_last_field("chips", &self.chips);
-
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::preset::chip::Chip {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Chip\n");
-        f.indent();
-
-        f.push_field("name", &self.name);
-        f.push_field("color", &self.color);
-        f.push_field("inputs", &self.inputs);
-        f.push_field("outputs", &self.outputs);
-        f.push_last_field("devices", &self.devices);
-
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::preset::chip::Input {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Input\n");
-        f.indent();
-
-        f.push_field("label", &self.label);
-        f.push_last_field("links", &self.links);
-
-        f.unindent();
-    }
-}
-impl GoodDebug for crate::preset::chip::Output {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Output / ");
-        self.label.good_debug(f);
-    }
-}
-impl GoodDebug for crate::preset::chip::Device {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("Device\n");
-        f.indent();
-
-        f.push_field("preset", &self.preset);
-        f.push_field("data", &self.data);
-        f.push_last_field("links", &self.links);
-
-        f.unindent();
-    }
-}
-
-impl GoodDebug for crate::preset::IoLabel {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str(&format!("{:?}", self));
-    }
-}
-impl GoodDebug for crate::preset::CombGate {
-    fn good_debug(&self, f: &mut Fmtter) {
-        f.push_str("CombGate\n");
-        f.indent();
-
-        f.push_field("name", &self.name);
-        f.push_field("color", &self.color);
-        f.push_field("inputs", &self.inputs);
-        f.push_field("outputs", &self.outputs);
-        f.push_last_field("table", &self.table);
-
-        f.unindent();
-    }
-}
+impl_enum_1!(crate,scene,chip:DeviceData { CombGate });
+impl_struct!(crate,scene,chip:Device { preset, links, data });
+impl_struct!(crate,scene,chip:Io { state });
+impl_struct!(crate,scene,chip:Chip { writes, inputs, outputs, devices });
+impl_struct!(crate,scene,chip:Write { delay, target, state });
