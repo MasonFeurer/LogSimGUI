@@ -1,75 +1,68 @@
 use super::{CombGate, SetOutput};
-use crate::{preset, BitField, IntId, LinkTarget, WithLinks};
-
-#[derive(Debug, Clone)]
-pub enum DeviceData {
-    CombGate(CombGate),
-}
-impl DeviceData {
-    pub fn set_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
-        match self {
-            Self::CombGate(e) => e.set_input(input, state, set_outputs),
-        }
-    }
-}
+use crate::{preset, BitField, DeviceInput, LinkTarget};
 
 #[derive(Debug, Clone)]
 pub struct Device {
-    pub preset: IntId,
     pub links: Vec<Vec<LinkTarget<usize>>>,
-    pub data: DeviceData,
+    pub data: CombGate,
 }
 
 #[derive(Debug, Clone)]
-pub struct Io {
+pub struct Input {
+    pub state: bool,
+    pub links: Vec<DeviceInput<usize>>,
+}
+#[derive(Debug, Clone)]
+pub struct Output {
     pub state: bool,
 }
 
 #[derive(Default, Debug, Clone)]
 pub struct Chip {
     pub writes: Vec<Write>,
-    pub inputs: Vec<WithLinks<Io, usize>>,
-    pub outputs: Vec<Io>,
+    pub inputs: Vec<Input>,
+    pub outputs: Vec<Output>,
     pub devices: Vec<Device>,
 }
 impl Chip {
-    pub fn from_preset(preset: &preset::chip::Chip, presets: &preset::Presets) -> Self {
+    pub fn from_preset(preset: &preset::chip::Chip) -> Self {
         let inputs = preset
             .inputs
             .iter()
-            .map(|input| input.map_item(|_| Io { state: false }))
+            .map(|input| Input {
+                state: false,
+                links: input.links.clone(),
+            })
             .collect();
-        let outputs = preset.outputs.iter().map(|_| Io { state: false }).collect();
+        let outputs = preset
+            .outputs
+            .iter()
+            .map(|_| Output { state: false })
+            .collect();
 
         let mut writes = Vec::new();
         let mut devices = Vec::new();
 
-        for device in &preset.devices {
-            let device_preset = presets.get_preset(device.preset).unwrap();
-            let data = match device_preset {
-                preset::Preset::CombGate(e) => {
-                    let output = e.table.get(BitField::single(0));
-                    // for any gate output that is on, queue a write for the links
-                    for i in 0..e.table.num_outputs {
-                        if !output.get(i) {
-                            continue;
-                        }
-                        writes.extend(device.links[i as usize].iter().map(Write::new_on));
-                    }
-
-                    DeviceData::CombGate(CombGate {
-                        preset: device.preset,
-                        input: BitField::single(0),
-                        output,
-                        table: e.table.clone(),
-                    })
+        for comb_gate in &preset.comb_gates {
+            let (num_inputs, num_outputs) =
+                (comb_gate.table.num_inputs, comb_gate.table.num_outputs);
+            let output = comb_gate.table.get(0);
+            // for any gate output that is on, queue a write for the links
+            for i in 0..num_outputs {
+                if !output.get(i) {
+                    continue;
                 }
-                _ => unreachable!(),
+                writes.extend(comb_gate.links[i as usize].iter().map(Write::new_on));
+            }
+
+            let data = CombGate {
+                input: BitField::empty(num_inputs as u8),
+                output,
+                table: comb_gate.table.clone(),
             };
             devices.push(Device {
-                preset: device.preset,
                 data,
-                links: device.links.clone(),
+                links: comb_gate.links.clone(),
             });
         }
 
@@ -112,10 +105,10 @@ impl Chip {
     }
 
     pub fn set_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
-        self.inputs[input].item.state = state;
+        self.inputs[input].state = state;
 
         for link in self.inputs[input].links.clone() {
-            self.set_link_target(link, state, set_outputs);
+            self.set_link_target(link.wrap(), state, set_outputs);
         }
     }
 
@@ -148,7 +141,7 @@ impl Chip {
 
     #[inline(always)]
     pub fn get_input(&self, input: usize) -> Option<bool> {
-        Some(self.inputs.get(input)?.item.state)
+        Some(self.inputs.get(input)?.state)
     }
     #[inline(always)]
     pub fn get_output(&self, output: usize) -> Option<bool> {

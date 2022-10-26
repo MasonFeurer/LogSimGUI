@@ -6,9 +6,6 @@ pub fn good_debug<T: GoodDebug>(t: &T) -> String {
     t.good_debug(&mut f);
     f.result
 }
-// pub fn good_debug<T>(_: &T) -> &'static str {
-//     "debug umimplemented!"
-// }
 
 pub struct Fmtter {
     pub indent: u8,
@@ -78,6 +75,23 @@ impl<T: GoodDebug> GoodDebug for [T] {
         f.unindent();
     }
 }
+impl<A: GoodDebug, B: GoodDebug> GoodDebug for (A, B) {
+    fn good_debug(&self, f: &mut Fmtter) {
+        f.push_str("tuple");
+        f.push_str("\n");
+        f.indent();
+
+        f.push_indent();
+        self.0.good_debug(f);
+        f.push_str("\n");
+
+        f.push_indent();
+        self.1.good_debug(f);
+        f.push_str("\n");
+
+        f.unindent();
+    }
+}
 impl<T: GoodDebug> GoodDebug for Vec<T> {
     fn good_debug(&self, f: &mut Fmtter) {
         f.push_str("list");
@@ -142,6 +156,12 @@ impl_from_debug!(
     eframe::egui::Color32,
 );
 
+impl<T: Debug> GoodDebug for crate::DeviceInput<T> {
+    fn good_debug(&self, f: &mut Fmtter) {
+        f.push_str(&format!("{:?}", self));
+    }
+}
+
 // *** CUSTOM IMPLS ***
 impl<T: Debug> GoodDebug for crate::LinkTarget<T> {
     fn good_debug(&self, f: &mut Fmtter) {
@@ -195,25 +215,29 @@ macro_rules! impl_enum_1 {
 
 impl_struct!(crate:BitField { len, data });
 impl_struct!(crate:TruthTable { num_inputs, num_outputs, map });
-impl_struct!(crate:WithLinks<T, L> { item, links });
+impl_struct!(crate:DeviceVisuals { name, color });
 
-impl_struct!(crate,preset:Io { y_pos, width, name, implicit });
-impl_struct!(crate,preset:CombGate { name, color, inputs, outputs, table });
-impl_enum_1!(crate,preset:Preset { CombGate, Chip });
-impl_struct!(crate,preset:CatPreset { cat, preset });
-impl_struct!(crate,preset:Presets { cats, next_cat_id, presets, next_preset_id });
-impl_struct!(crate,preset,chip:Chip { name, color, inputs, outputs, devices });
-impl_struct!(crate,preset,chip:Device { preset, links });
+impl_struct!(crate,preset:Io { name, implicit });
+impl_struct!(crate,preset:CombGate { inputs, outputs, table });
+impl_enum_1!(crate,preset:PresetData { CombGate, Chip });
+impl_struct!(crate,preset:Preset { vis, data });
+impl_struct!(crate,preset:Cat { name, presets, next_preset_id });
+impl_struct!(crate,preset:Presets { cats, next_cat_id });
+
+impl_struct!(crate,preset,chip:Chip { inputs, outputs, comb_gates });
+impl_struct!(crate,preset,chip:CombGate { table, links });
+impl_struct!(crate,preset,chip:Input { preset, links });
 
 impl_struct!(crate,scene:Write { target, state });
 impl_enum_1!(crate,scene:DeviceData { CombGate, Chip });
-impl_struct!(crate,scene:Device { preset, pos, data, links });
-impl_struct!(crate,scene:CombGate { preset, input, output, table });
-impl_struct!(crate,scene:Io { preset, state });
+impl_struct!(crate,scene:Device { pos, size, data, links, vis, input_presets, output_presets });
+impl_struct!(crate,scene:CombGate { input, output, table });
+impl_struct!(crate,scene:Input { preset, state, links, y_pos });
+impl_struct!(crate,scene:Output { preset, state });
 impl_struct!(crate,scene:Scene { rect, inputs, outputs, devices, writes });
 
-impl_enum_1!(crate,scene,chip:DeviceData { CombGate });
-impl_struct!(crate,scene,chip:Device { preset, links, data });
-impl_struct!(crate,scene,chip:Io { state });
+impl_struct!(crate,scene,chip:Device { links, data });
+impl_struct!(crate,scene,chip:Input { state, links });
+impl_struct!(crate,scene,chip:Output { state });
 impl_struct!(crate,scene,chip:Chip { writes, inputs, outputs, devices });
 impl_struct!(crate,scene,chip:Write { delay, target, state });

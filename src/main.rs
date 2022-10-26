@@ -1,7 +1,5 @@
 #![feature(let_chains)]
 
-// TODO (small) : impl speed adjustment
-
 // TODO (big) : allow for changing Io config (name, width, implicit?) in scene inputs/outputs
 //  a button next to the io, that opens a menu for such edits
 
@@ -15,31 +13,75 @@ use serde::{Deserialize, Serialize};
 
 pub use eframe::egui::{Color32 as Color, Pos2, Rect, Vec2};
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DeviceVisuals {
+    pub name: String,
+    pub color: Color,
+}
+
+#[derive(Debug, Clone)]
+pub enum NewLink<T> {
+    InputToDeviceInput(T, DeviceInput<T>),
+    DeviceOutputTo(T, usize, LinkTarget<T>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceInput<T>(pub T, pub usize);
+impl<T: Copy> DeviceInput<T> {
+    pub fn wrap(&self) -> LinkTarget<T> {
+        LinkTarget::DeviceInput(self.0, self.1)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum IoDir {
+    Left,
+    Right,
+}
+#[derive(Debug, Clone, Copy)]
+pub enum IoSize {
+    Small,
+    Large,
+}
+
 #[derive(Debug, Clone)]
 pub struct IoDef {
-    pub y: f32,
-    pub h: f32,
-    pub base_x: f32,
-    pub tip_x: f32,
+    pub pos: Pos2,
+    pub size: IoSize,
+    pub dir: IoDir,
 }
 impl IoDef {
-    pub fn rect(&self) -> Rect {
-        let (y0, y1) = (self.y - self.h * 0.5, self.y + self.h * 0.5);
+    #[inline(always)]
+    fn real_size(&self, settings: &graphics::Settings) -> Vec2 {
+        match self.size {
+            IoSize::Small => settings.small_io_size,
+            IoSize::Large => settings.large_io_size,
+        }
+    }
 
-        if self.base_x < self.tip_x {
-            Rect::from_min_max(Pos2::new(self.base_x, y0), Pos2::new(self.tip_x, y1))
-        } else {
-            Rect::from_min_max(Pos2::new(self.tip_x, y0), Pos2::new(self.base_x, y1))
+    pub fn rect(&self, settings: &graphics::Settings) -> Rect {
+        let size = self.real_size(settings);
+        let (y0, y1) = (self.pos.y - size.y * 0.5, self.pos.y + size.y * 0.5);
+
+        match self.dir {
+            IoDir::Left => Rect {
+                min: Pos2::new(self.pos.x - size.x, y0),
+                max: Pos2::new(self.pos.x, y1),
+            },
+            IoDir::Right => Rect {
+                min: Pos2::new(self.pos.x, y0),
+                max: Pos2::new(self.pos.x + size.x, y1),
+            },
         }
     }
 
     #[inline(always)]
-    pub fn tip_loc(&self) -> Pos2 {
-        Pos2::new(self.tip_x, self.y)
-    }
-    #[inline(always)]
-    pub fn base_loc(&self) -> Pos2 {
-        Pos2::new(self.base_x, self.y)
+    pub fn tip_loc(&self, settings: &graphics::Settings) -> Pos2 {
+        let size = self.real_size(settings);
+        match self.dir {
+            IoDir::Left => Pos2::new(self.pos.x - size.x, self.pos.y),
+            IoDir::Right => Pos2::new(self.pos.x + size.x, self.pos.y),
+        }
     }
 }
 
@@ -76,6 +118,10 @@ impl BitField {
             len: 1,
             data: bit as u32,
         }
+    }
+    #[inline(always)]
+    pub fn empty(len: u8) -> Self {
+        Self { len, data: 0 }
     }
     pub fn from_bits(bits: &[u8]) -> Self {
         assert!(bits.len() <= 32);
@@ -117,8 +163,8 @@ pub struct TruthTable {
 }
 impl TruthTable {
     #[inline(always)]
-    pub fn get(&self, input: BitField) -> BitField {
-        self.map[input.data as usize]
+    pub fn get(&self, input: usize) -> BitField {
+        self.map[input]
     }
 }
 
@@ -131,28 +177,6 @@ pub enum LinkTarget<T> {
 pub enum LinkStart<T> {
     DeviceOutput(T, usize),
     Input(T),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct WithLinks<T, L> {
-    pub item: T,
-    pub links: Vec<LinkTarget<L>>,
-}
-impl<T, L: Clone> WithLinks<T, L> {
-    #[inline(always)]
-    pub fn none(item: T) -> Self {
-        Self {
-            item,
-            links: Vec::new(),
-        }
-    }
-    #[inline(always)]
-    pub fn map_item<N>(&self, map: impl FnOnce(&T) -> N) -> WithLinks<N, L> {
-        WithLinks {
-            item: map(&self.item),
-            links: self.links.clone(),
-        }
-    }
 }
 
 fn main() {

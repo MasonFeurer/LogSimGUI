@@ -1,38 +1,27 @@
 pub mod chip;
 
-use crate::{BitField, Color, IntId, TruthTable};
+use crate::{BitField, Color, DeviceVisuals, IntId, TruthTable};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Io {
-    pub y_pos: f32, // normalized
-    pub width: u8,
     pub name: String,
     pub implicit: bool,
 }
 impl Io {
-    pub fn default_at(y_pos: f32) -> Self {
+    pub fn new() -> Self {
         Self {
-            y_pos,
-            width: 1,
             name: String::new(),
             implicit: false,
         }
     }
     pub fn from_names(implicit: bool, names: &[&str]) -> Vec<Self> {
         let mut result = Vec::with_capacity(names.len());
-        let y_step = 1.0_f32 / (names.len() + 1) as f32;
-        let mut y_pos = y_step;
-
         for name in names {
             result.push(Self {
-                y_pos,
-                width: 1,
                 name: String::from(*name),
                 implicit,
             });
-            y_pos += y_step;
         }
         result
     }
@@ -40,8 +29,6 @@ impl Io {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CombGate {
-    pub name: String,
-    pub color: Color,
     pub inputs: Vec<Io>,
     pub outputs: Vec<Io>,
     pub table: TruthTable,
@@ -67,25 +54,11 @@ impl CombGate {
 }
 
 #[derive(Serialize, Deserialize)]
-pub enum Preset {
+pub enum PresetData {
     CombGate(CombGate),
     Chip(chip::Chip),
 }
-impl Preset {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::CombGate(e) => &e.name,
-            Self::Chip(e) => &e.name,
-        }
-    }
-
-    pub fn color(&self) -> &Color {
-        match self {
-            Self::CombGate(e) => &e.color,
-            Self::Chip(e) => &e.color,
-        }
-    }
-
+impl PresetData {
     pub fn num_inputs(&self) -> usize {
         match self {
             Self::CombGate(e) => e.num_inputs(),
@@ -111,211 +84,258 @@ impl Preset {
             Self::Chip(e) => e.get_output(output),
         }
     }
-
-    #[inline(always)]
-    pub fn get_input_loc(&self, input: usize) -> Option<f32> {
-        Some(self.get_input(input)?.y_pos)
+    pub fn inputs(&self) -> Vec<Io> {
+        match self {
+            Self::CombGate(e) => e.inputs.clone(),
+            Self::Chip(e) => e.inputs.iter().map(|input| input.preset.clone()).collect(),
+        }
     }
-    #[inline(always)]
-    pub fn get_output_loc(&self, output: usize) -> Option<f32> {
-        Some(self.get_output(output)?.y_pos)
+    pub fn outputs(&self) -> Vec<Io> {
+        match self {
+            Self::CombGate(e) => e.outputs.clone(),
+            Self::Chip(e) => e.outputs.clone(),
+        }
     }
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct CatPreset {
-    pub cat: IntId,
-    pub preset: Preset,
+pub struct Preset {
+    pub vis: DeviceVisuals,
+    pub data: PresetData,
 }
+
+#[inline(always)]
+fn key_index<K: PartialEq, V>(list: &[(K, V)], key: K) -> Option<usize> {
+    list.iter().position(|(cmp_key, _)| *cmp_key == key)
+}
+#[inline(always)]
+fn key_sort<K: PartialOrd + Ord, V>(list: &mut [(K, V)]) {
+    list.sort_by(|(a_id, _), (b_id, _)| a_id.cmp(&b_id));
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Cat {
+    pub name: String,
+    pub presets: Vec<(IntId, Preset)>,
+    pub next_preset_id: IntId,
+}
+impl Cat {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            presets: Vec::new(),
+            next_preset_id: IntId(0),
+        }
+    }
+    pub fn add_preset(&mut self, preset: Preset) -> IntId {
+        let id = self.next_preset_id.get_inc();
+        self.presets.push((id, preset));
+        key_sort(&mut self.presets);
+        id
+    }
+    pub fn remove_preset(&mut self, id: IntId) {
+        let idx = key_index(&self.presets, id).unwrap();
+        self.presets.remove(idx);
+        key_sort(&mut self.presets);
+    }
+
+    pub fn get_preset(&self, id: IntId) -> Option<&Preset> {
+        self.presets
+            .iter()
+            .find(|(cmp_id, _)| *cmp_id == id)
+            .map(|(_, preset)| preset)
+    }
+    pub fn mut_preset(&mut self, id: IntId) -> Option<&mut Preset> {
+        self.presets
+            .iter_mut()
+            .find(|(cmp_id, _)| *cmp_id == id)
+            .map(|(_, preset)| preset)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Presets {
-    pub cats: HashMap<IntId, String>,
+    pub cats: Vec<(IntId, Cat)>,
     pub next_cat_id: IntId,
-
-    pub presets: HashMap<IntId, CatPreset>,
-    pub next_preset_id: IntId,
 }
 impl Presets {
     pub fn new() -> Self {
         Self {
-            cats: HashMap::new(),
+            cats: Vec::new(),
             next_cat_id: IntId(0),
-
-            presets: HashMap::new(),
+        }
+    }
+    pub fn default() -> Self {
+        let mut cat = Cat {
+            name: String::from("Basic"),
+            presets: Vec::new(),
             next_preset_id: IntId(0),
-        }
-    }
-    pub fn defaults() -> Self {
-        let mut new = Self::new();
-        new.add_defaults();
-        new
-    }
-
-    pub fn get_preset(&self, id: IntId) -> Option<&Preset> {
-        self.presets.get(&id).map(|e| &e.preset)
-    }
-    pub fn get_comb_gate(&self, id: IntId) -> Option<&CombGate> {
-        if let Some(preset) = self.get_preset(id) {
-            if let Preset::CombGate(comb_gate) = preset {
-                Some(comb_gate)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-    pub fn get_cat(&self, id: IntId) -> Option<&str> {
-        self.cats.get(&id).map(String::as_str)
-    }
-
-    pub fn add_preset(&mut self, cat: IntId, preset: Preset) -> IntId {
-        let id = self.next_preset_id.get_inc();
-        self.presets.insert(id, CatPreset { cat, preset });
-        id
-    }
-
-    pub fn remove_cat(&mut self, cat: IntId) {
-        self.cats.remove(&cat);
-        let mut remove_presets = Vec::new();
-        for (preset_id, preset) in &self.presets {
-            if preset.cat == cat {
-                remove_presets.push(*preset_id);
-            }
-        }
-        for preset in remove_presets {
-            self.presets.remove(&preset);
-        }
-    }
-    pub fn remove_preset(&mut self, preset: IntId) {
-        self.presets.remove(&preset);
-    }
-    pub fn add_cat(&mut self, cat: String) -> IntId {
-        let id = self.next_cat_id.get_inc();
-        self.cats.insert(id, cat);
-        id
-    }
-
-    pub fn add_defaults(&mut self) {
-        let cat_id = self.add_cat("Basic".to_owned());
+        };
         for preset in [
-            Preset::CombGate(and_gate()),
-            Preset::CombGate(not_gate()),
-            Preset::CombGate(nand_gate()),
-            Preset::CombGate(nor_gate()),
-            Preset::CombGate(or_gate()),
+            and_gate_preset(),
+            not_gate_preset(),
+            nand_gate_preset(),
+            nor_gate_preset(),
+            or_gate_preset(),
         ] {
-            self.add_preset(cat_id, preset);
+            let id = cat.next_preset_id.get_inc();
+            cat.presets.push((id, preset));
+        }
+        Self {
+            cats: vec![(IntId(0), cat)],
+            next_cat_id: IntId(1),
         }
     }
 
-    #[inline(always)]
-    pub fn get_cats(&self) -> Vec<(IntId, String)> {
-        let mut cats: Vec<_> = self
-            .cats
+    pub fn add_cat(&mut self, name: String) -> IntId {
+        let id = self.next_cat_id.get_inc();
+        self.cats.push((id, Cat::new(name)));
+        key_sort(&mut self.cats);
+        id
+    }
+    pub fn remove_cat(&mut self, id: IntId) {
+        let idx = key_index(&self.cats, id).unwrap();
+        self.cats.remove(idx);
+        key_sort(&mut self.cats);
+    }
+
+    pub fn get_cat(&self, id: IntId) -> Option<&Cat> {
+        self.cats
             .iter()
-            .map(|(id, name)| (*id, name.clone()))
-            .collect();
-        cats.sort_by(|(a_id, _), (b_id, _)| a_id.cmp(&b_id));
-        cats
+            .find(|(cmp_id, _)| *cmp_id == id)
+            .map(|(_, cat)| cat)
     }
-    pub fn get_cat_presets(&self, cat: IntId) -> Vec<(IntId, &Preset)> {
-        let mut result = Vec::new();
-        for (preset_id, preset) in &self.presets {
-            if preset.cat == cat {
-                result.push((*preset_id, &preset.preset));
-            }
-        }
-        result
+    pub fn mut_cat(&mut self, id: IntId) -> Option<&mut Cat> {
+        self.cats
+            .iter_mut()
+            .find(|(cmp_id, _)| *cmp_id == id)
+            .map(|(_, cat)| cat)
     }
 }
 
-pub fn and_gate() -> CombGate {
-    CombGate {
-        name: String::from("And"),
-        color: Color::from_rgb(255, 0, 0),
-        inputs: Io::from_names(true, &["a", "b"]),
-        outputs: Io::from_names(true, &["out"]),
-        table: TruthTable {
-            num_inputs: 2,
-            num_outputs: 1,
-            map: vec![
-                BitField::single(0), // 00
-                BitField::single(0), // 01
-                BitField::single(0), // 10
-                BitField::single(1), // 11
-            ],
+pub fn and_gate_preset() -> Preset {
+    Preset {
+        vis: DeviceVisuals {
+            name: String::from("And"),
+            color: Color::from_rgb(255, 0, 0),
         },
+        data: PresetData::CombGate(CombGate {
+            inputs: Io::from_names(true, &["a", "b"]),
+            outputs: Io::from_names(true, &["out"]),
+            table: and_truth_table(),
+        }),
     }
 }
-pub fn not_gate() -> CombGate {
-    CombGate {
-        name: String::from("Not"),
-        color: Color::from_rgb(0, 255, 0),
-        inputs: Io::from_names(true, &["in"]),
-        outputs: Io::from_names(true, &["out"]),
-        table: TruthTable {
-            num_inputs: 1,
-            num_outputs: 1,
-            map: vec![
-                BitField::single(1), // 0
-                BitField::single(0), // 1
-            ],
+pub fn not_gate_preset() -> Preset {
+    Preset {
+        vis: DeviceVisuals {
+            name: String::from("Not"),
+            color: Color::from_rgb(0, 255, 0),
         },
+        data: PresetData::CombGate(CombGate {
+            inputs: Io::from_names(true, &["in"]),
+            outputs: Io::from_names(true, &["out"]),
+            table: not_truth_table(),
+        }),
     }
 }
 
-pub fn nand_gate() -> CombGate {
-    CombGate {
-        name: String::from("Nand"),
-        color: Color::from_rgb(0, 0, 255),
-        inputs: Io::from_names(true, &["a", "b"]),
-        outputs: Io::from_names(true, &["out"]),
-        table: TruthTable {
-            num_inputs: 2,
-            num_outputs: 1,
-            map: vec![
-                BitField::single(1), // 00
-                BitField::single(1), // 01
-                BitField::single(1), // 10
-                BitField::single(0), // 11
-            ],
+pub fn nand_gate_preset() -> Preset {
+    Preset {
+        vis: DeviceVisuals {
+            name: String::from("Nand"),
+            color: Color::from_rgb(0, 0, 255),
         },
+        data: PresetData::CombGate(CombGate {
+            inputs: Io::from_names(true, &["a", "b"]),
+            outputs: Io::from_names(true, &["out"]),
+            table: nand_truth_table(),
+        }),
     }
 }
-pub fn nor_gate() -> CombGate {
-    CombGate {
-        name: String::from("Nor"),
-        color: Color::from_rgb(255, 255, 0),
-        inputs: Io::from_names(true, &["a", "b"]),
-        outputs: Io::from_names(true, &["out"]),
-        table: TruthTable {
-            num_inputs: 2,
-            num_outputs: 1,
-            map: vec![
-                BitField::single(1), // 00
-                BitField::single(0), // 01
-                BitField::single(0), // 10
-                BitField::single(0), // 11
-            ],
+pub fn nor_gate_preset() -> Preset {
+    Preset {
+        vis: DeviceVisuals {
+            name: String::from("Nor"),
+            color: Color::from_rgb(255, 255, 0),
         },
+        data: PresetData::CombGate(CombGate {
+            inputs: Io::from_names(true, &["a", "b"]),
+            outputs: Io::from_names(true, &["out"]),
+            table: nor_truth_table(),
+        }),
     }
 }
-pub fn or_gate() -> CombGate {
-    CombGate {
-        name: String::from("Or"),
-        color: Color::from_rgb(0, 255, 255),
-        inputs: Io::from_names(true, &["a", "b"]),
-        outputs: Io::from_names(true, &["out"]),
-        table: TruthTable {
-            num_inputs: 2,
-            num_outputs: 1,
-            map: vec![
-                BitField::single(0), // 00
-                BitField::single(1), // 01
-                BitField::single(1), // 10
-                BitField::single(1), // 11
-            ],
+pub fn or_gate_preset() -> Preset {
+    Preset {
+        vis: DeviceVisuals {
+            name: String::from("Or"),
+            color: Color::from_rgb(0, 255, 255),
         },
+        data: PresetData::CombGate(CombGate {
+            inputs: Io::from_names(true, &["a", "b"]),
+            outputs: Io::from_names(true, &["out"]),
+            table: or_truth_table(),
+        }),
+    }
+}
+
+pub fn and_truth_table() -> TruthTable {
+    TruthTable {
+        num_inputs: 2,
+        num_outputs: 1,
+        map: vec![
+            BitField::single(0), // 00
+            BitField::single(0), // 01
+            BitField::single(0), // 10
+            BitField::single(1), // 11
+        ],
+    }
+}
+pub fn not_truth_table() -> TruthTable {
+    TruthTable {
+        num_inputs: 1,
+        num_outputs: 1,
+        map: vec![
+            BitField::single(1), // 0
+            BitField::single(0), // 1
+        ],
+    }
+}
+
+pub fn nand_truth_table() -> TruthTable {
+    TruthTable {
+        num_inputs: 2,
+        num_outputs: 1,
+        map: vec![
+            BitField::single(1), // 00
+            BitField::single(1), // 01
+            BitField::single(1), // 10
+            BitField::single(0), // 11
+        ],
+    }
+}
+pub fn nor_truth_table() -> TruthTable {
+    TruthTable {
+        num_inputs: 2,
+        num_outputs: 1,
+        map: vec![
+            BitField::single(1), // 00
+            BitField::single(0), // 01
+            BitField::single(0), // 10
+            BitField::single(0), // 11
+        ],
+    }
+}
+pub fn or_truth_table() -> TruthTable {
+    TruthTable {
+        num_inputs: 2,
+        num_outputs: 1,
+        map: vec![
+            BitField::single(0), // 00
+            BitField::single(1), // 01
+            BitField::single(1), // 10
+            BitField::single(1), // 11
+        ],
     }
 }

@@ -47,32 +47,74 @@ pub fn state_color(state: bool) -> Color32 {
     }
 }
 
-pub struct Context<'a> {
+pub struct Settings {
+    pub io_col_w: f32,
+    pub small_io_size: Vec2,
+    pub large_io_size: Vec2,
+    pub device_io_spacing: f32,
+    pub device_io_sep: f32,
+    pub device_name_font_size: f32,
+    pub device_name_hover_text: bool,
+}
+impl Settings {
+    pub fn default() -> Self {
+        Self {
+            io_col_w: 40.0,
+            small_io_size: Vec2::new(15.0, 8.0),
+            large_io_size: Vec2::new(30.0, 10.0),
+            device_io_spacing: 5.0,
+            device_io_sep: 10.0,
+            device_name_font_size: 30.0,
+            device_name_hover_text: false,
+        }
+    }
+}
+
+pub const DEVICE_NAME_CHAR_W: f32 = 18.0;
+pub const IO_STROKE: Option<ShowStroke> = Some(ShowStroke {
+    color: [Color::WHITE; 2],
+    width: [0.0, 1.0],
+});
+
+pub fn io_presets_height(presets: &[preset::Io]) -> f32 {
+    pub const DEVICE_IO_SPACING: f32 = 15.0;
+
+    let mut height = 0.0;
+    for _ in presets {
+        height += DEVICE_IO_SPACING;
+    }
+    height + DEVICE_IO_SPACING
+}
+
+pub struct Context<'a, 'b> {
     pub rect: Rect,
     pub pointer_pos: Pos2,
     pub shapes: Vec<Shape>,
     pub ui: &'a Ui,
-    pub id_stack: Vec<Id>,
+    pub id_stack: Vec<String>,
+    pub id: Id,
+    pub settings: &'b Settings,
 }
-impl<'a> Context<'a> {
-    pub fn new(ui: &'a Ui, first_id: Id, rect: Rect, pointer_pos: Pos2) -> Self {
+impl<'a, 'b> Context<'a, 'b> {
+    pub fn new(ui: &'a Ui, settings: &'b Settings, rect: Rect, pointer_pos: Pos2) -> Self {
         Self {
             rect,
             pointer_pos,
             shapes: Vec::new(),
             ui,
-            id_stack: vec![first_id],
+            id_stack: Vec::new(),
+            id: Id::null(),
+            settings,
         }
     }
 
-    pub fn push_id(&mut self, map: impl Fn(Id) -> Id) {
-        self.id_stack.push(map(*self.id_stack.last().unwrap()));
+    pub fn push_id<T: std::fmt::Display>(&mut self, v: T) {
+        self.id_stack.push(format!("{}", v));
+        self.id = Id::new(&self.id_stack);
     }
     pub fn pop_id(&mut self) {
         self.id_stack.pop();
-    }
-    pub fn id(&self) -> Id {
-        *self.id_stack.last().unwrap()
+        self.id = Id::new(&self.id_stack);
     }
 
     pub fn any_click(&self) -> bool {
@@ -80,7 +122,6 @@ impl<'a> Context<'a> {
     }
 }
 
-#[derive(Debug)]
 pub struct Interaction {
     pub drag: Vec2,
     pub clicked: bool,
@@ -99,13 +140,8 @@ impl Interaction {
         }
     }
 
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.drag == Vec2::ZERO
-            && !self.clicked
-            && !self.secondary_clicked
-            && !self.hovered
-            && !self.contains_pointer
+    pub fn should_handle(&self) -> bool {
+        self.drag != Vec2::ZERO || self.clicked || self.secondary_clicked || self.hovered
     }
 
     #[inline(always)]
@@ -114,57 +150,64 @@ impl Interaction {
     }
 }
 
-#[derive(Debug)]
 pub struct SubInteraction<T> {
     pub int: Interaction,
     pub sub: T,
 }
 
-fn show_io(ctx: &mut Context, def: &IoDef, preset: &preset::Io, state: bool) -> Interaction {
-    let color = state_color(state);
-    let rect = def.rect();
+#[derive(Clone)]
+pub struct ShowStroke {
+    pub color: [Color; 2],
+    pub width: [f32; 2],
+}
+#[derive(Clone)]
+pub struct ShowRect<'a> {
+    pub rect: Rect,
+    pub rounding: f32,
+    pub color: [Color; 2],
+    pub stroke: Option<ShowStroke>,
+    pub hover_text: Option<&'a str>,
+}
 
-    let mut response = ctx.ui.interact(rect, ctx.id(), Sense::click_and_drag());
-    if !preset.implicit {
-        if !preset.name.trim().is_empty() {
-            response = response.on_hover_text(&preset.name);
-        }
+pub fn show_rect(ctx: &mut Context, rect: ShowRect) -> Interaction {
+    let ShowRect {
+        rect,
+        rounding,
+        color,
+        stroke,
+        hover_text,
+    } = rect;
+
+    let mut response = ctx.ui.interact(rect, ctx.id, Sense::click_and_drag());
+    if let Some(text) = hover_text && !text.trim().is_empty() {
+		response = response.on_hover_text(text);
     }
     let int = Interaction::new(ctx, response);
 
-    let rounding = Rounding::none();
-
+    let color = if int.hovered { color[1] } else { color[0] };
+    let rounding = Rounding::same(rounding);
     ctx.shapes.push(Shape::rect_filled(rect, rounding, color));
 
-    if int.hovered {
-        let stroke = Stroke {
-            width: 1.0,
-            color: Color32::WHITE,
-        };
+    if let Some(ShowStroke { color, width }) = stroke {
+        let color = if int.hovered { color[1] } else { color[0] };
+        let width = if int.hovered { width[1] } else { width[0] };
+        let stroke = Stroke { width, color };
         ctx.shapes.push(Shape::rect_stroke(rect, rounding, stroke));
     }
     int
 }
+pub fn show_rects(ctx: &mut Context, rects: &[ShowRect]) -> Option<SubInteraction<usize>> {
+    let mut result_int = None;
 
-pub fn show_ios(
-    ctx: &mut Context,
-    id_step: &str,
-    ios: &[(IoDef, preset::Io, bool)],
-) -> Option<SubInteraction<usize>> {
-    let mut int = None;
-
-    for idx in 0..ios.len() {
-        let (def, preset, state) = &ios[idx];
-
-        ctx.push_id(|id| id.with(id_step).with(idx));
-        let io_int = show_io(ctx, def, preset, *state);
-        ctx.pop_id();
-
-        if !io_int.is_empty() {
-            int = Some(io_int.sub(idx));
+    for (idx, rect) in rects.iter().enumerate() {
+        ctx.push_id(idx);
+        let int = show_rect(ctx, rect.clone());
+        if int.should_handle() {
+            result_int = Some(int.sub(idx));
         }
+        ctx.pop_id();
     }
-    int
+    result_int
 }
 
 pub struct DeviceInteraction {
@@ -187,76 +230,95 @@ impl DeviceInteraction {
     }
 }
 
-pub fn show_device(
-    ctx: &mut Context,
-    pos: Pos2,
-    scene: &scene::Device,
-    preset: &preset::Preset,
-) -> DeviceInteraction {
-    let size = scene.data.size().to_vec2();
-    let rect = Rect::from_min_size(pos - size * 0.5, size);
+pub fn show_device(ctx: &mut Context, device: &scene::Device) -> DeviceInteraction {
+    let (num_inputs, num_outputs) = (device.data.num_inputs(), device.data.num_outputs());
 
-    // ## interact with rect
-    let response = ctx.ui.interact(rect, ctx.id(), Sense::drag());
-    let mut int = DeviceInteraction::from_response(ctx, response);
-
-    // ## show rect
-    let stroke = if int.int.hovered {
-        Stroke {
-            width: 3.0,
-            color: Color32::from_rgb(200, 200, 200),
-        }
+    let hover_text = if ctx.settings.device_name_hover_text {
+        Some(device.vis.name.as_str())
     } else {
-        Stroke {
-            width: 3.0,
-            color: Color32::from_rgb(150, 150, 150),
-        }
+        None
     };
+    let int = show_rect(
+        ctx,
+        ShowRect {
+            rect: device.rect(),
+            rounding: 5.0,
+            color: [device.vis.color; 2],
+            stroke: Some(ShowStroke {
+                color: [Color32::from_rgb(200, 200, 200); 2],
+                width: [1.0, 3.0],
+            }),
+            hover_text,
+        },
+    );
 
-    let color = preset.color();
-    let rounding = Rounding::same(3.0);
-
-    ctx.shapes.push(Shape::rect_filled(rect, rounding, *color));
-    ctx.shapes.push(Shape::rect_stroke(rect, rounding, stroke));
+    let name_color = if Rgba::from(device.vis.color).intensity() > 0.5 {
+        Color::BLACK
+    } else {
+        Color::WHITE
+    };
+    ctx.shapes.push(Shape::text(
+        &ctx.ui.fonts(),
+        device.pos + device.size * 0.5,
+        Align2::CENTER_CENTER,
+        &device.vis.name,
+        FontId::monospace(ctx.settings.device_name_font_size),
+        name_color,
+    ));
+    let mut int = DeviceInteraction::from_int(int);
 
     // ## show inputs
-    let inputs_arg: Vec<_> = (0..preset.num_inputs())
-        .into_iter()
-        .map(|i| {
-            (
-                scene.get_input_def(i).unwrap(),
-                preset.get_input(i).unwrap().clone(),
-                scene.data.get_input(i).unwrap(),
-            )
-        })
-        .collect();
+    let mut show_inputs = Vec::with_capacity(num_inputs);
+    for i in 0..num_inputs {
+        let state = device.data.get_input(i).unwrap();
+        let preset = &device.input_presets[i];
+        let hover_text = (!preset.implicit).then(|| preset.name.as_str());
 
-    let io_sub_int = show_ios(ctx, ".input", &inputs_arg);
-    if let Some(sub_int) = io_sub_int {
+        show_inputs.push(ShowRect {
+            rect: device.input_defs[i].rect(ctx.settings),
+            rounding: 0.0,
+            color: [state_color(state); 2],
+            stroke: IO_STROKE,
+            hover_text,
+        });
+    }
+
+    ctx.push_id("_input_");
+    let inputs_sub_int = show_rects(ctx, &show_inputs);
+    ctx.pop_id();
+
+    if let Some(sub_int) = inputs_sub_int {
         int.input = Some(sub_int);
     }
 
-    // ## show outputs
-    let outputs_arg: Vec<_> = (0..preset.num_outputs())
-        .into_iter()
-        .map(|i| {
-            (
-                scene.get_output_def(i).unwrap(),
-                preset.get_output(i).unwrap().clone(),
-                scene.data.get_output(i).unwrap(),
-            )
-        })
-        .collect();
+    // ## show inputs
+    let mut show_outputs = Vec::with_capacity(num_outputs);
+    for i in 0..num_outputs {
+        let state = device.data.get_output(i).unwrap();
+        let preset = &device.input_presets[i];
+        let hover_text = (!preset.implicit).then(|| preset.name.as_str());
 
-    let io_sub_int = show_ios(ctx, ".output", &outputs_arg);
-    if let Some(sub_int) = io_sub_int {
+        show_outputs.push(ShowRect {
+            rect: device.output_defs[i].rect(ctx.settings),
+            rounding: 0.0,
+            color: [state_color(state); 2],
+            stroke: IO_STROKE,
+            hover_text,
+        });
+    }
+
+    ctx.push_id("_output_");
+    let outputs_sub_int = show_rects(ctx, &show_outputs);
+    ctx.pop_id();
+
+    if let Some(sub_int) = outputs_sub_int {
         int.output = Some(sub_int);
     }
     int
 }
 
 pub fn show_link(ctx: &mut Context, state: bool, from: Pos2, to: Pos2) -> Interaction {
-    let hovered = line_contains_point((from, to), 6.0, ctx.pointer_pos);
+    let hovered = line_contains_point((from, to), 10.0, ctx.pointer_pos);
 
     let int = Interaction {
         drag: Vec2::ZERO,
@@ -286,7 +348,6 @@ pub struct ShowSceneResult {
     pub toggle_device_input: Option<(IntId, usize)>,
 }
 
-#[derive(Debug)]
 pub enum SceneInteraction {
     Input(SubInteraction<IntId>),
     Output(SubInteraction<IntId>),
@@ -298,14 +359,14 @@ pub enum SceneInteraction {
 pub fn show_scene(
     ctx: &mut Context,
     scene: &scene::Scene,
-    presets: &preset::Presets,
     dead_links: &mut Vec<(LinkStart<IntId>, usize)>,
 ) -> Option<SceneInteraction> {
+    ctx.push_id("scene");
     let mut int = None;
 
     // IO COLUMN BARS
-    let input_x = ctx.rect.min.x + scene::IO_COL_W;
-    let output_x = ctx.rect.max.x - scene::IO_COL_W;
+    let input_x = ctx.rect.min.x + ctx.settings.io_col_w;
+    let output_x = ctx.rect.max.x - ctx.settings.io_col_w;
     let stroke = Stroke {
         width: 2.0,
         color: Color32::from_gray(100),
@@ -326,16 +387,15 @@ pub fn show_scene(
     ));
 
     // DRAW DEVICES
+    ctx.push_id("_device_");
     for (device_id, device) in &scene.devices {
-        let device_preset = presets.get_preset(device.preset).unwrap();
-
         // DRAW DEVICE
-        ctx.push_id(|prev_id| prev_id.with(".device_").with(device_id));
-        let device_int = show_device(ctx, device.pos, device, device_preset);
+        ctx.push_id(device_id.0);
+        let device_int = show_device(ctx, device);
         ctx.pop_id();
 
         // HANDLE DEVICE INTERACTIONS
-        if !device_int.int.is_empty() {
+        if device_int.int.should_handle() {
             int = Some(SceneInteraction::Device(device_int.int.sub(*device_id)));
         }
         if let Some(input_int) = device_int.input {
@@ -350,57 +410,90 @@ pub fn show_scene(
             for (link_idx, target) in device.links[output_idx].iter().enumerate() {
                 let state = device.data.get_output(output_idx).unwrap();
 
-                let link_start = device.get_output_def(output_idx).unwrap().tip_loc();
+                let link_start = device
+                    .output_defs
+                    .get(output_idx)
+                    .unwrap()
+                    .tip_loc(ctx.settings);
 
                 let Some(target_def) = scene.get_link_target_def(target) else {
                 	dead_links.push((LinkStart::DeviceOutput(*device_id, output_idx), link_idx));
                 	continue
                 };
 
-                show_link(ctx, state, link_start, target_def.tip_loc());
+                show_link(ctx, state, link_start, target_def.tip_loc(ctx.settings));
             }
         }
     }
+    ctx.pop_id();
 
     // DRAW SCENE INPUTS
-    for (id, WithLinks { item: input, links }) in &scene.inputs {
-        ctx.push_id(|prev_id| prev_id.with(".input_").with(id));
+    ctx.push_id("_input_");
+    for (id, input) in &scene.inputs {
+        ctx.push_id(id.0);
 
         // DRAW INPUT
         let def = scene.get_input_def(input);
-        let io_int = show_io(ctx, &def, &input.preset, input.state);
+        let io_int = show_rect(
+            ctx,
+            ShowRect {
+                rect: def.rect(ctx.settings),
+                rounding: 0.0,
+                color: [state_color(input.state); 2],
+                stroke: IO_STROKE,
+                hover_text: None,
+            },
+        );
         ctx.pop_id();
 
         // HANDLE INPUT INTERACTION
-        if !io_int.is_empty() {
+        if io_int.should_handle() {
             int = Some(SceneInteraction::Input(io_int.sub(*id)));
         }
 
         // DRAW LINKS FROM INPUT
-        let link_start = def.tip_loc();
-        for (link_idx, target) in links.iter().rev().enumerate() {
-            let Some(target_def) = scene.get_link_target_def(target) else {
+        let link_start = def.tip_loc(ctx.settings);
+        for (link_idx, target) in input.links.iter().rev().enumerate() {
+            let Some(target_def) = scene.get_link_target_def(&target.wrap()) else {
             	dead_links.push((LinkStart::Input(*id), link_idx));
         		continue
         	};
 
-            show_link(ctx, input.state, link_start, target_def.tip_loc());
+            show_link(
+                ctx,
+                input.state,
+                link_start,
+                target_def.tip_loc(ctx.settings),
+            );
         }
     }
+    ctx.pop_id();
 
     // DRAW SCENE OUTPUTS
+    ctx.push_id("_output_");
     for (id, output) in &scene.outputs {
         let def = scene.get_output_def(output);
 
         // DRAW OUTPUT
-        ctx.push_id(|prev_id| prev_id.with(".output_").with(id));
-        let io_int = show_io(ctx, &def, &output.preset, output.state);
+        ctx.push_id(id.0);
+        let io_int = show_rect(
+            ctx,
+            ShowRect {
+                rect: def.rect(ctx.settings),
+                rounding: 0.0,
+                color: [state_color(output.state); 2],
+                stroke: IO_STROKE,
+                hover_text: None,
+            },
+        );
         ctx.pop_id();
 
         // HANDLE OUTPUT INTERACTION
-        if !io_int.is_empty() {
+        if io_int.should_handle() {
             int = Some(SceneInteraction::Output(io_int.sub(*id)));
         }
     }
+    ctx.pop_id();
+    ctx.pop_id();
     int
 }
