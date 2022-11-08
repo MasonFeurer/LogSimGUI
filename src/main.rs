@@ -1,22 +1,20 @@
 #![feature(let_chains)]
 
-// TODO (big) : allow for changing Io config (name, width, implicit?) in scene inputs/outputs
-//  a button next to the io, that opens a menu for such edits
-
 pub mod app;
-pub mod debug;
 pub mod graphics;
 pub mod preset;
 pub mod scene;
+pub mod settings;
 
-use serde::{Deserialize, Serialize};
-
+use crate::preset::PinPreset;
+use crate::settings::Settings;
 pub use eframe::egui::{Color32 as Color, Pos2, Rect, Vec2};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeviceVisuals {
     pub name: String,
-    pub color: Color,
+    pub color: [u8; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -33,56 +31,75 @@ impl<T: Copy> DeviceInput<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum IoDir {
-    Left,
-    Right,
+#[derive(Clone)]
+pub struct Pin<'a> {
+    pub origin: Pos2,
+    pub left: bool,
+    pub large: bool,
+    pub name: &'a str,
 }
-#[derive(Debug, Clone, Copy)]
-pub enum IoSize {
-    Small,
-    Large,
-}
-
-#[derive(Debug, Clone)]
-pub struct IoDef {
-    pub pos: Pos2,
-    pub size: IoSize,
-    pub dir: IoDir,
-}
-impl IoDef {
+impl<'a> Pin<'a> {
     #[inline(always)]
-    fn real_size(&self, settings: &graphics::Settings) -> Vec2 {
-        match self.size {
-            IoSize::Small => settings.small_io_size,
-            IoSize::Large => settings.large_io_size,
+    pub fn size(&self, settings: &Settings) -> Vec2 {
+        match self.large {
+            true => settings.scene_pin_size.into(),
+            false => settings.device_pin_size.into(),
         }
     }
-
-    pub fn rect(&self, settings: &graphics::Settings) -> Rect {
-        let size = self.real_size(settings);
-        let (y0, y1) = (self.pos.y - size.y * 0.5, self.pos.y + size.y * 0.5);
-
-        match self.dir {
-            IoDir::Left => Rect {
-                min: Pos2::new(self.pos.x - size.x, y0),
-                max: Pos2::new(self.pos.x, y1),
-            },
-            IoDir::Right => Rect {
-                min: Pos2::new(self.pos.x, y0),
-                max: Pos2::new(self.pos.x + size.x, y1),
-            },
-        }
-    }
-
     #[inline(always)]
-    pub fn tip_loc(&self, settings: &graphics::Settings) -> Pos2 {
-        let size = self.real_size(settings);
-        match self.dir {
-            IoDir::Left => Pos2::new(self.pos.x - size.x, self.pos.y),
-            IoDir::Right => Pos2::new(self.pos.x + size.x, self.pos.y),
+    pub fn rect(&self, settings: &Settings) -> Rect {
+        let size = self.size(settings);
+        let min = match self.left {
+            true => self.origin - Vec2::new(size.x, size.y * 0.5),
+            false => self.origin - Vec2::new(0.0, size.y * 0.5),
+        };
+        Rect::from_min_size(min, size)
+    }
+    #[inline(always)]
+    pub fn tip(&self, settings: &Settings) -> Pos2 {
+        let (origin, size) = (self.origin, self.size(settings));
+        match self.left {
+            false => Pos2::new(origin.x + size.x, origin.y),
+            true => Pos2::new(origin.x - size.x, origin.y),
         }
     }
+
+    pub fn spread_presets(
+        presets: &'a [PinPreset],
+        pos: Pos2,
+        h: f32,
+        left: bool,
+        large: bool,
+    ) -> Vec<Self> {
+        let mut out = Vec::with_capacity(presets.len());
+        let step = h / (presets.len() + 1) as f32;
+
+        let mut temp_y = pos.y + step;
+        for i in 0..presets.len() {
+            out.push(Self {
+                origin: Pos2::new(pos.x, temp_y),
+                left,
+                large,
+                name: presets[i].name.as_str(),
+            });
+            temp_y += step;
+        }
+        out
+    }
+}
+
+pub fn spread_values(count: usize, from: f32, to: f32) -> Vec<f32> {
+    let mut out = vec![f32::from_bits(0); count];
+
+    let dist = (from - to).abs();
+    let step = dist / (count + 1) as f32;
+
+    let mut temp = from + step;
+    for i in 0..count {
+        out[i] = temp;
+        temp += step;
+    }
+    out
 }
 
 // damn those derives tho
@@ -108,19 +125,21 @@ impl std::hash::Hash for IntId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BitField {
-    pub len: u8,
+    len: usize,
     pub data: u32,
 }
 impl BitField {
     #[inline(always)]
     pub fn single(bit: u8) -> Self {
+        assert!(bit == 0 || bit == 1);
         Self {
             len: 1,
             data: bit as u32,
         }
     }
     #[inline(always)]
-    pub fn empty(len: u8) -> Self {
+    pub fn empty(len: usize) -> Self {
+        assert!(len <= 32);
         Self { len, data: 0 }
     }
     pub fn from_bits(bits: &[u8]) -> Self {
@@ -130,24 +149,32 @@ impl BitField {
             data |= (bits[i] as u32) << i;
         }
         Self {
-            len: bits.len() as u8,
+            len: bits.len(),
             data,
         }
     }
 
     #[inline(always)]
-    pub fn set(&mut self, pos: u8, state: bool) {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline(always)]
+    pub fn set(&mut self, pos: usize, state: bool) {
         assert!(pos < self.len);
         self.data = (self.data & !(1 << pos as u32)) | ((state as u32) << pos);
     }
     #[inline(always)]
-    pub fn get(&self, pos: u8) -> bool {
+    pub fn get(&self, pos: usize) -> bool {
         assert!(pos < self.len);
         ((self.data >> pos as u32) & 1) == 1
     }
+    pub fn any_on(&self) -> bool {
+        self.data.count_ones() > 0
+    }
 
     pub fn bits(self) -> Vec<bool> {
-        let mut bits = Vec::with_capacity(self.len as usize);
+        let mut bits = Vec::with_capacity(self.len);
         for i in 0..self.len {
             bits.push(self.get(i));
         }
@@ -157,8 +184,8 @@ impl BitField {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TruthTable {
-    pub num_inputs: u8,
-    pub num_outputs: u8,
+    pub num_inputs: usize,
+    pub num_outputs: usize,
     pub map: Vec<BitField>,
 }
 impl TruthTable {
@@ -168,7 +195,7 @@ impl TruthTable {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub enum LinkTarget<T> {
     DeviceInput(T, usize),
     Output(T),

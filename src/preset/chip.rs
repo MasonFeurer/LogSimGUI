@@ -1,3 +1,4 @@
+use super::PinPreset;
 use crate::*;
 use serde::{Deserialize, Serialize};
 
@@ -7,50 +8,24 @@ pub struct CombGate {
     pub links: Vec<Vec<LinkTarget<usize>>>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Input {
-    pub preset: super::Io,
-    pub links: Vec<DeviceInput<usize>>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Chip {
-    pub inputs: Vec<Input>,
-    pub outputs: Vec<crate::preset::Io>,
+pub struct ChipPreset {
+    pub inputs: Vec<PinPreset>,
+    pub outputs: Vec<PinPreset>,
+    pub input_links: Vec<Vec<DeviceInput<usize>>>,
     pub comb_gates: Vec<CombGate>,
 }
-impl Chip {
+impl ChipPreset {
     pub fn from_scene(scene: &scene::Scene) -> Self {
-        // println!("Chip::from_scene");
         let step1 = step1::exec(scene);
-        // println!("step1: {step1:#?}");
-
         let step2 = step2::exec(&step1);
-        // println!("step2: {step2:#?}");
 
         Self {
             inputs: step2.inputs,
             outputs: step2.outputs,
+            input_links: step2.input_links,
             comb_gates: step2.comb_gates,
         }
-    }
-}
-/// GETTERS
-impl Chip {
-    #[inline(always)]
-    pub fn num_inputs(&self) -> usize {
-        self.inputs.len()
-    }
-    #[inline(always)]
-    pub fn num_outputs(&self) -> usize {
-        self.outputs.len()
-    }
-
-    pub fn get_input(&self, input: usize) -> Option<&super::Io> {
-        Some(&self.inputs.get(input)?.preset)
-    }
-    pub fn get_output(&self, output: usize) -> Option<&super::Io> {
-        self.outputs.get(output)
     }
 }
 
@@ -58,8 +33,9 @@ impl Chip {
 // New ID's are created for nested CombGates when they are unnested,
 // and all links pointing at that CombGate is changed to the new ID
 mod step1 {
+    use crate::preset::PinPreset;
     use crate::*;
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
 
     #[derive(Debug)]
     pub struct CombGate {
@@ -70,13 +46,13 @@ mod step1 {
     #[derive(Debug)]
     pub struct Input {
         pub y_pos: f32,
-        pub preset: crate::preset::Io,
+        pub preset: PinPreset,
         pub links: Vec<DeviceInput<IntId>>,
     }
     #[derive(Debug)]
     pub struct Output {
         pub y_pos: f32,
-        pub preset: crate::preset::Io,
+        pub preset: PinPreset,
     }
 
     #[derive(Debug)]
@@ -90,7 +66,6 @@ mod step1 {
         pub input_links: Vec<Vec<DeviceInput<IntId>>>,
     }
 
-    use crate::scene;
     pub fn exec(scene: &scene::Scene) -> Scene {
         let mut comb_gates = HashMap::with_capacity(scene.devices.len());
         let mut moved_chips = HashMap::new();
@@ -114,11 +89,10 @@ mod step1 {
                     }
 
                     let input_links = chip
-                        .inputs
+                        .input_links
                         .iter()
-                        .map(|input| {
-                            input
-                                .links
+                        .map(|links| {
+                            links
                                 .iter()
                                 .map(|DeviceInput(device, input)| {
                                     DeviceInput(device_ids[*device], *input)
@@ -204,7 +178,9 @@ mod step1 {
                 }
                 let input = Input {
                     y_pos: input.y_pos,
-                    preset: input.preset.clone(),
+                    preset: PinPreset {
+                        name: input.name.clone(),
+                    },
                     links,
                 };
                 (*id, input)
@@ -218,7 +194,9 @@ mod step1 {
             .map(|(id, output)| {
                 let output = Output {
                     y_pos: output.y_pos,
-                    preset: output.preset.clone(),
+                    preset: PinPreset {
+                        name: output.name.clone(),
+                    },
                 };
                 (*id, output)
             })
@@ -234,14 +212,16 @@ mod step1 {
 
 // When the IntId's are mapped to indices
 mod step2 {
-    use super::{CombGate, Input};
+    use super::CombGate;
+    use crate::preset::PinPreset;
     use crate::*;
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
 
     #[derive(Debug)]
     pub struct Scene {
-        pub inputs: Vec<Input>,
-        pub outputs: Vec<crate::preset::Io>,
+        pub inputs: Vec<PinPreset>,
+        pub outputs: Vec<PinPreset>,
+        pub input_links: Vec<Vec<DeviceInput<usize>>>,
         pub comb_gates: Vec<CombGate>,
     }
 
@@ -280,24 +260,25 @@ mod step2 {
             }
             new_links
         };
-        let map_input_links = |links: &[DeviceInput<IntId>]| -> Vec<DeviceInput<usize>> {
-            let mut new_links = Vec::with_capacity(links.len());
-
-            for DeviceInput(device, input) in links {
-                new_links.push(DeviceInput(*comb_gate_indices.get(device).unwrap(), *input));
-            }
-            new_links
-        };
 
         let mut scene_inputs: Vec<_> = scene.inputs.iter().collect();
         scene_inputs.sort_by(|(_, a), (_, b)| a.y_pos.partial_cmp(&b.y_pos).unwrap());
 
+        let input_links: Vec<_> = scene_inputs
+            .iter()
+            .map(|(_, input)| {
+                let mut new_links = Vec::with_capacity(input.links.len());
+
+                for DeviceInput(device, input) in &input.links {
+                    new_links.push(DeviceInput(*comb_gate_indices.get(device).unwrap(), *input));
+                }
+                new_links
+            })
+            .collect();
+
         let inputs = scene_inputs
             .into_iter()
-            .map(|(_, input)| Input {
-                preset: input.preset.clone(),
-                links: map_input_links(&input.links),
-            })
+            .map(|(_, input)| input.preset.clone())
             .collect();
 
         for (id, comb_gate) in &scene.comb_gates {
@@ -313,6 +294,7 @@ mod step2 {
         Scene {
             inputs,
             outputs,
+            input_links,
             comb_gates,
         }
     }

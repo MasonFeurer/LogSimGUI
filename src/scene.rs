@@ -1,10 +1,66 @@
 pub mod chip;
 
-use crate::graphics::DEVICE_NAME_CHAR_W;
+use crate::graphics::View;
+use crate::preset::PinPreset;
+use crate::settings::Settings;
 use crate::*;
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 pub use chip::Chip;
+
+// :WRITE
+#[derive(Debug, Clone)]
+pub struct Write<T> {
+    pub target: LinkTarget<T>,
+    pub state: bool,
+    pub delay: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct WriteQueue<T>(pub Vec<Write<T>>);
+impl<T: Clone + PartialEq> WriteQueue<T> {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn push(&mut self, target: LinkTarget<T>, state: bool) {
+        // if there is already a queued write to the same target, this write must eventually execute after it,
+        // by making sure it's delay is greater than the already queued event.
+        // let mut min_delay = 0;
+        for write in &mut self.0 {
+            if write.target == target {
+                write.delay += fastrand::u8(0..3);
+                write.state = state;
+                return;
+            }
+            // min_delay = std::cmp::max(min_delay, write.delay);
+        }
+        // let delay = min_delay + fastrand::u8(1..6);
+        self.0.push(Write {
+            target,
+            state,
+            // delay,
+            delay: fastrand::u8(0..3),
+        })
+    }
+
+    pub fn update(&mut self, ready: &mut Vec<Write<T>>) {
+        let mut keep = Vec::with_capacity(self.0.len());
+        for write in &self.0 {
+            if write.delay == 0 {
+                ready.push(write.clone());
+            } else {
+                keep.push(Write {
+                    delay: write.delay - 1,
+                    target: write.target.clone(),
+                    state: write.state,
+                });
+            }
+        }
+        self.0 = keep;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SetOutput {
@@ -12,14 +68,48 @@ pub struct SetOutput {
     pub state: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct Write {
-    pub target: LinkTarget<IntId>,
-    pub state: bool,
+// :COMBGATE
+#[derive(Clone, Debug)]
+pub struct CombGate {
+    pub input: BitField,
+    pub output: BitField,
+    pub table: TruthTable,
+}
+impl CombGate {
+    pub fn new(table: TruthTable) -> Self {
+        Self {
+            input: BitField {
+                len: table.num_inputs,
+                data: 0,
+            },
+            output: table.map[0],
+            table,
+        }
+    }
+
+    pub fn set_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
+        self.input.set(input, state);
+        let result = self.table.get(self.input.data as usize);
+
+        if result == self.output {
+            return;
+        }
+
+        for i in 0..self.output.len() {
+            if self.output.get(i) == result.get(i) {
+                continue;
+            }
+            set_outputs.push(SetOutput {
+                output: i,
+                state: result.get(i),
+            });
+        }
+        self.output = result;
+    }
 }
 
+// :DDATA
 #[derive(Debug, Clone)]
-// TODO rename to `DeviceState`
 pub enum DeviceData {
     CombGate(CombGate),
     Chip(Chip),
@@ -39,188 +129,100 @@ impl DeviceData {
         }
     }
 
-    pub fn num_inputs(&self) -> usize {
+    #[inline(always)]
+    pub fn input(&self) -> BitField {
         match self {
-            Self::CombGate(e) => e.num_inputs(),
-            Self::Chip(e) => e.num_inputs(),
+            Self::CombGate(e) => e.input,
+            Self::Chip(e) => e.input,
         }
     }
-    pub fn num_outputs(&self) -> usize {
+    #[inline(always)]
+    pub fn output(&self) -> BitField {
         match self {
-            Self::CombGate(e) => e.num_outputs(),
-            Self::Chip(e) => e.num_outputs(),
-        }
-    }
-    pub fn get_input(&self, input: usize) -> Option<bool> {
-        match self {
-            Self::CombGate(e) => Some(e.get_input(input)),
-            Self::Chip(e) => e.get_input(input),
-        }
-    }
-    pub fn get_output(&self, output: usize) -> Option<bool> {
-        match self {
-            Self::CombGate(e) => Some(e.get_output(output)),
-            Self::Chip(e) => e.get_output(output),
+            Self::CombGate(e) => e.output,
+            Self::Chip(e) => e.output,
         }
     }
 }
 
-pub fn device_input_defs(rect: Rect, num_io: usize, out: &mut Vec<IoDef>) {
-    let sp = rect.height() / (num_io + 1) as f32;
-
-    let mut y = sp + rect.min.y;
-    for _ in 0..num_io {
-        out.push(IoDef {
-            pos: Pos2::new(rect.min.x, y),
-            size: IoSize::Small,
-            dir: IoDir::Left,
-        });
-        y += sp;
-    }
-}
-pub fn device_output_defs(rect: Rect, num_io: usize, out: &mut Vec<IoDef>) {
-    let sp = rect.height() / (num_io + 1) as f32;
-
-    let mut y = sp + rect.min.y;
-    for _ in 0..num_io {
-        out.push(IoDef {
-            pos: Pos2::new(rect.max.x, y),
-            size: IoSize::Small,
-            dir: IoDir::Right,
-        });
-        y += sp;
-    }
-}
-
+// :DEVICE
 #[derive(Debug, Clone)]
 pub struct Device {
     pub pos: Pos2,
-    pub size: Vec2,
-    // TODO rename to `state`
     pub data: DeviceData,
     pub links: Vec<Vec<LinkTarget<IntId>>>,
-    pub vis: DeviceVisuals,
+    pub name: String,
+    pub color: Color,
 
-    pub input_presets: Vec<preset::Io>,
-    pub output_presets: Vec<preset::Io>,
-    pub input_defs: Vec<IoDef>,
-    pub output_defs: Vec<IoDef>,
+    pub input_presets: Vec<PinPreset>,
+    pub output_presets: Vec<PinPreset>,
 }
 impl Device {
     pub fn new(
-        vis: DeviceVisuals,
-        data: DeviceData,
         pos: Pos2,
-        input_presets: Vec<preset::Io>,
-        output_presets: Vec<preset::Io>,
+        data: DeviceData,
+        name: String,
+        color: Color,
+        input_presets: Vec<PinPreset>,
+        output_presets: Vec<PinPreset>,
     ) -> Self {
-        let (num_inputs, num_outputs) = (data.num_inputs(), data.num_outputs());
-
-        let height = f32::max(
-            graphics::io_presets_height(&input_presets),
-            graphics::io_presets_height(&output_presets),
-        );
-        let width = vis.name.len() as f32 * DEVICE_NAME_CHAR_W;
-
-        let size = Vec2::new(width, height);
-        let rect = Rect::from_min_size(pos, size);
-
-        let mut input_defs = Vec::with_capacity(num_inputs);
-        device_input_defs(rect, num_inputs, &mut input_defs);
-
-        let mut output_defs = Vec::with_capacity(num_outputs);
-        device_output_defs(rect, num_outputs, &mut output_defs);
-
         Self {
             pos,
-            size,
             data,
-            links: vec![Vec::new(); num_outputs],
-            vis,
+            links: vec![Vec::new(); output_presets.len()],
+            name,
+            color,
 
-            input_defs,
-            output_defs,
             input_presets,
             output_presets,
         }
     }
 
     #[inline(always)]
-    pub fn rect(&self) -> Rect {
-        Rect::from_min_size(self.pos, self.size)
+    pub fn pos(&self, view: &View) -> Pos2 {
+        view.map_pos(self.pos)
     }
 
-    pub fn drag(&mut self, v: Vec2) {
-        let (num_inputs, num_outputs) = (self.input_defs.len(), self.output_defs.len());
-        self.pos += v;
-        self.input_defs.clear();
-        self.output_defs.clear();
-        let rect = self.rect();
-        device_input_defs(rect, num_inputs, &mut self.input_defs);
-        device_output_defs(rect, num_outputs, &mut self.output_defs);
+    #[inline(always)]
+    pub fn size(&self, settings: &Settings, view: &View) -> Vec2 {
+        view.map_vec(settings.device_size(
+            self.input_presets.len(),
+            self.output_presets.len(),
+            &self.name,
+        ))
+    }
+    #[inline(always)]
+    pub fn rect(&self, settings: &Settings, view: &View) -> Rect {
+        Rect::from_min_size(self.pos(view), self.size(settings, view))
+    }
+
+    #[inline(always)]
+    pub fn input_pins(&self, settings: &Settings, view: &View) -> Vec<Pin> {
+        Pin::spread_presets(
+            &self.input_presets,
+            self.pos(view),
+            self.size(settings, view).y,
+            true,
+            false,
+        )
+    }
+    #[inline(always)]
+    pub fn output_pins(&self, settings: &Settings, view: &View) -> Vec<Pin> {
+        let size = self.size(settings, view);
+        Pin::spread_presets(
+            &self.output_presets,
+            self.pos(view) + Vec2::new(size.x, 0.0),
+            size.y,
+            false,
+            false,
+        )
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct CombGate {
-    pub input: BitField,
-    pub output: BitField,
-    pub table: TruthTable,
-}
-impl CombGate {
-    pub fn new(table: TruthTable) -> Self {
-        Self {
-            input: BitField {
-                len: table.num_inputs,
-                data: 0,
-            },
-            output: table.map[0],
-            table,
-        }
-    }
-
-    #[inline(always)]
-    pub fn num_inputs(&self) -> usize {
-        self.table.num_inputs as usize
-    }
-    #[inline(always)]
-    pub fn num_outputs(&self) -> usize {
-        self.table.num_outputs as usize
-    }
-
-    #[inline(always)]
-    pub fn get_output(&self, output: usize) -> bool {
-        self.output.get(output as u8)
-    }
-    #[inline(always)]
-    pub fn get_input(&self, input: usize) -> bool {
-        self.input.get(input as u8)
-    }
-
-    pub fn set_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
-        self.input.set(input as u8, state);
-        let result = self.table.get(self.input.data as usize);
-
-        if result == self.output {
-            return;
-        }
-
-        for i in 0..self.num_outputs() {
-            if self.output.get(i as u8) == result.get(i as u8) {
-                continue;
-            }
-            set_outputs.push(SetOutput {
-                output: i,
-                state: result.get(i as u8),
-            });
-        }
-        self.output = result;
-    }
-}
-
+// :IO
 #[derive(Clone, Debug)]
 pub struct Input {
-    pub preset: preset::Io,
+    pub name: String,
     pub y_pos: f32,
     pub state: bool,
     pub links: Vec<DeviceInput<IntId>>,
@@ -228,78 +230,75 @@ pub struct Input {
 impl Input {
     pub fn new(y_pos: f32) -> Self {
         Self {
-            preset: preset::Io::new(),
+            name: String::new(),
             y_pos,
             state: false,
             links: Vec::new(),
         }
     }
 }
+
 #[derive(Clone, Debug)]
 pub struct Output {
-    pub preset: preset::Io,
+    pub name: String,
     pub y_pos: f32,
     pub state: bool,
 }
 impl Output {
     pub fn new(y_pos: f32) -> Self {
         Self {
-            preset: preset::Io::new(),
+            name: String::new(),
             y_pos,
             state: false,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+// :SCENE DECL
+#[derive(Debug)]
 pub struct Scene {
     pub rect: Rect,
+    pub write_queue: WriteQueue<IntId>,
+
     pub inputs: HashMap<IntId, Input>,
     pub outputs: HashMap<IntId, Output>,
     pub devices: HashMap<IntId, Device>,
-    pub writes: Vec<Write>,
 }
 impl Scene {
     pub fn new() -> Self {
         Self {
             rect: Rect::from_min_max(Pos2::ZERO, Pos2::ZERO),
+            write_queue: WriteQueue::new(),
+
             inputs: HashMap::new(),
             outputs: HashMap::new(),
             devices: HashMap::new(),
-            writes: Vec::new(),
-        }
-    }
-
-    pub fn exec_write(&mut self, write: Write, new_writes: &mut Vec<Write>) {
-        match write.target {
-            LinkTarget::DeviceInput(device, input) => {
-                let Some(device) = self.devices.get_mut(&device) else { return };
-                let mut set_outputs = Vec::new();
-
-                device.data.set_input(input, write.state, &mut set_outputs);
-
-                for SetOutput { output, state } in set_outputs {
-                    for target in device.links[output].clone() {
-                        new_writes.push(Write { target, state });
-                    }
-                }
-            }
-            LinkTarget::Output(output) => {
-                let Some(output) = self.outputs.get_mut(&output) else { return };
-                output.state = write.state;
-            }
         }
     }
 
     pub fn update(&mut self) {
-        let mut writes = Vec::new();
-        std::mem::swap(&mut writes, &mut self.writes);
-        let mut new_writes = Vec::new();
+        let mut ready_writes = Vec::new();
+        self.write_queue.update(&mut ready_writes);
+        for write in ready_writes {
+            match write.target {
+                LinkTarget::DeviceInput(device, input) => {
+                    let Some(device) = self.devices.get_mut(&device) else { return };
+                    let mut set_outputs = Vec::new();
 
-        for write in writes {
-            self.exec_write(write, &mut new_writes);
+                    device.data.set_input(input, write.state, &mut set_outputs);
+
+                    for SetOutput { output, state } in set_outputs {
+                        for target in &device.links[output] {
+                            self.write_queue.push(target.clone(), state);
+                        }
+                    }
+                }
+                LinkTarget::Output(output) => {
+                    let Some(output) = self.outputs.get_mut(&output) else { return };
+                    output.state = write.state;
+                }
+            }
         }
-        self.writes = new_writes;
 
         // executed the writes for the scene, but contained chips may have queued writes
         for (_, device) in &mut self.devices {
@@ -309,164 +308,258 @@ impl Scene {
             chip.update(&mut set_outputs);
 
             for SetOutput { output, state } in set_outputs {
-                for target in device.links[output].clone() {
-                    self.writes.push(Write { target, state });
+                for target in &device.links[output] {
+                    self.write_queue.push(target.clone(), state);
                 }
             }
         }
     }
 }
-/// SETTERS
+// :SCENE DEVICES
 impl Scene {
-    pub fn set_input(&mut self, input: IntId, state: bool) {
-        let Some(input) = self.inputs.get_mut(&input) else { return };
-        input.state = state;
-        for target in input.links.clone() {
-            self.writes.push(Write {
-                target: target.wrap(),
-                state,
-            });
-        }
+    pub fn add_device(&mut self, id: IntId, device: Device) {
+        self.devices.insert(id, device);
     }
-    pub fn set_device_input(&mut self, device: IntId, input: usize, state: bool) {
-        let Some(device) = self.devices.get_mut(&device) else { return };
+
+    pub fn drag_device(&mut self, id: IntId, drag: Vec2) {
+        self.devices.get_mut(&id).unwrap().pos += drag;
+    }
+
+    pub fn del_device(&mut self, id: IntId) {
+        let device = self.devices.get(&id).unwrap();
+        for output_idx in 0..device.data.output().len() {
+            if device.data.output().get(output_idx) == false {
+                continue;
+            }
+            for link in &device.links[output_idx] {
+                self.write_queue.push(link.clone(), false);
+            }
+        }
+        self.devices.remove(&id).unwrap();
+    }
+
+    pub fn set_device_input(&mut self, id: IntId, input: usize, state: bool) {
+        let Some(device) = self.devices.get_mut(&id) else { return };
         let mut set_outputs = Vec::new();
 
         device.data.set_input(input, state, &mut set_outputs);
 
         for SetOutput { output, state } in set_outputs {
-            for target in device.links[output].clone() {
-                self.writes.push(Write { target, state });
+            for target in &device.links[output] {
+                self.write_queue.push(target.clone(), state);
             }
         }
     }
-}
 
-/// ADD ITEMS
+    #[inline(always)]
+    pub fn get_device_input(&self, device: IntId, input: usize) -> Option<bool> {
+        Some(self.devices.get(&device)?.data.input().get(input))
+    }
+    #[inline(always)]
+    pub fn get_device_output(&self, device: IntId, output: usize) -> Option<bool> {
+        Some(self.devices.get(&device)?.data.output().get(output))
+    }
+}
+// :SCENE INPUTS
 impl Scene {
-    pub fn add_input(&mut self, input: Input) -> IntId {
-        let id = IntId::new();
+    pub fn set_input(&mut self, input: IntId, state: bool) {
+        let Some(input) = self.inputs.get_mut(&input) else { return };
+        input.state = state;
+        for target in input.links.clone() {
+            self.write_queue.push(target.wrap(), state);
+        }
+    }
+
+    pub fn add_input(&mut self, id: IntId, input: Input) {
         self.inputs.insert(id, input);
-        id
     }
 
-    pub fn add_output(&mut self, output: Output) -> IntId {
-        let id = IntId::new();
-        self.outputs.insert(id, output);
-        id
+    pub fn drag_input(&mut self, id: IntId, drag: Vec2) {
+        self.inputs.get_mut(&id).unwrap().y_pos += drag.y;
     }
 
-    pub fn add_device(&mut self, device: Device) -> IntId {
-        let id = IntId::new();
-        self.devices.insert(id, device);
-        id
+    pub fn del_input(&mut self, id: IntId) {
+        self.inputs.remove(&id).unwrap();
     }
 
-    pub fn add_link(&mut self, link: NewLink<IntId>) {
-        match link {
-            NewLink::InputToDeviceInput(input, device_input) => {
-                let input = self.inputs.get_mut(&input).unwrap();
-                input.links.push(device_input.clone());
-
-                self.writes.push(Write {
-                    state: input.state,
-                    target: device_input.wrap(),
-                });
-            }
-            NewLink::DeviceOutputTo(device, output, target) => {
-                let device = self.devices.get_mut(&device).unwrap();
-                device.links[output].push(target.clone());
-                let state = device.data.get_output(output).unwrap();
-
-                self.writes.push(Write { state, target });
-            }
-        }
+    pub fn get_input(&self, id: IntId) -> Option<&Input> {
+        self.inputs.get(&id)
     }
 }
-
-/// GETTERS
+// :SCENE OUTPUTS
 impl Scene {
     #[inline(always)]
-    pub fn get_input_def(&self, input: &Input) -> IoDef {
-        IoDef {
-            pos: Pos2::new(self.rect.min.x, input.y_pos),
-            size: IoSize::Large,
-            dir: IoDir::Right,
-        }
-    }
-    #[inline(always)]
-    pub fn get_output_def(&self, output: &Output) -> IoDef {
-        IoDef {
-            pos: Pos2::new(self.rect.max.x, output.y_pos),
-            size: IoSize::Large,
-            dir: IoDir::Left,
-        }
+    pub fn add_output(&mut self, id: IntId, output: Output) {
+        self.outputs.insert(id, output);
     }
 
-    pub fn get_link_target_def(&self, target: &LinkTarget<IntId>) -> Option<IoDef> {
-        Some(self.get_link_target(target)?.0)
-    }
-    pub fn get_link_start_def(&self, start: &LinkStart<IntId>) -> Option<IoDef> {
-        Some(self.get_link_start(start)?.0)
-    }
-
-    #[inline(always)]
-    pub fn get_link_target(&self, target: &LinkTarget<IntId>) -> Option<(IoDef, bool)> {
-        match target {
-            LinkTarget::DeviceInput(device, input) => {
-                let device = self.devices.get(device)?;
-                Some((
-                    device.input_defs.get(*input)?.clone(),
-                    device.data.get_input(*input)?,
-                ))
-            }
-            LinkTarget::Output(output) => {
-                let output = self.outputs.get(output)?;
-                Some((self.get_output_def(output), output.state))
-            }
-        }
-    }
-    #[inline(always)]
-    pub fn get_link_start(&self, start: &LinkStart<IntId>) -> Option<(IoDef, bool)> {
-        match start {
-            LinkStart::DeviceOutput(device, output) => {
-                let device = self.devices.get(device)?;
-                Some((
-                    device.output_defs.get(*output)?.clone(),
-                    device.data.get_output(*output)?,
-                ))
-            }
-            LinkStart::Input(input) => {
-                let input = &self.inputs.get(input)?.clone();
-                Some((self.get_input_def(input), input.state))
-            }
-        }
-    }
-
-    #[inline(always)]
-    pub fn num_inputs(&self) -> usize {
-        self.inputs.len()
-    }
     #[inline(always)]
     pub fn num_outputs(&self) -> usize {
         self.outputs.len()
     }
 
+    pub fn get_output(&self, id: IntId) -> Option<&Output> {
+        self.outputs.get(&id)
+    }
+
+    pub fn drag_output(&mut self, id: IntId, drag: Vec2) {
+        self.outputs.get_mut(&id).unwrap().y_pos += drag.y;
+    }
+
+    pub fn del_output(&mut self, id: IntId) {
+        self.outputs.remove(&id).unwrap();
+    }
+}
+// :SCENE ADD ITEMS
+impl Scene {
+    pub fn add_link(&mut self, link: NewLink<IntId>) {
+        match link {
+            NewLink::InputToDeviceInput(input, target) => {
+                let input = self.inputs.get_mut(&input).unwrap();
+                input.links.push(target.clone());
+
+                self.write_queue.push(target.wrap(), input.state);
+            }
+            NewLink::DeviceOutputTo(device, output, target) => {
+                let device = self.devices.get_mut(&device).unwrap();
+                device.links[output].push(target.clone());
+                let state = device.data.output().get(output);
+
+                self.write_queue.push(target, state);
+            }
+        }
+    }
+}
+// :SCENE DEFS
+impl Scene {
     #[inline(always)]
-    pub fn get_input(&self, input: IntId) -> Option<bool> {
-        Some(self.inputs.get(&input)?.state)
+    pub fn input_pin<'a>(&self, input: &'a Input, settings: &Settings, view: &View) -> Pin<'a> {
+        Pin {
+            origin: Pos2::new(
+                self.rect.min.x + settings.scene_pin_col_w,
+                view.map_y(input.y_pos),
+            ),
+            left: false,
+            large: true,
+            name: input.name.as_str(),
+        }
     }
     #[inline(always)]
-    pub fn get_output(&self, output: IntId) -> Option<bool> {
-        Some(self.outputs.get(&output)?.state)
+    pub fn output_pin<'a>(&self, output: &'a Output, settings: &Settings, view: &View) -> Pin<'a> {
+        Pin {
+            origin: Pos2::new(
+                self.rect.max.x - settings.scene_pin_col_w,
+                view.map_y(output.y_pos),
+            ),
+            left: true,
+            large: true,
+            name: output.name.as_str(),
+        }
     }
 
     #[inline(always)]
-    pub fn get_device_input(&self, device: IntId, input: usize) -> Option<bool> {
-        self.devices.get(&device)?.data.get_input(input)
+    pub fn get_link_target_pin(
+        &self,
+        target: &LinkTarget<IntId>,
+        settings: &Settings,
+        view: &View,
+    ) -> Option<Pin> {
+        match target {
+            LinkTarget::DeviceInput(device, input) => {
+                let device = self.devices.get(device)?;
+                Some(device.input_pins(settings, view)[*input].clone())
+            }
+            LinkTarget::Output(output) => {
+                Some(self.output_pin(self.outputs.get(output)?, settings, view))
+            }
+        }
     }
     #[inline(always)]
-    pub fn get_device_output(&self, device: IntId, output: usize) -> Option<bool> {
-        self.devices.get(&device)?.data.get_output(output)
+    pub fn get_link_start_pin(
+        &self,
+        start: &LinkStart<IntId>,
+        settings: &Settings,
+        view: &View,
+    ) -> Option<Pin> {
+        match start {
+            LinkStart::DeviceOutput(device, output) => {
+                let device = self.devices.get(device)?;
+                Some(device.output_pins(settings, view)[*output].clone())
+            }
+            LinkStart::Input(input) => {
+                Some(self.input_pin(self.inputs.get(input)?, settings, view))
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_link_target_state(&self, target: &LinkTarget<IntId>) -> Option<bool> {
+        match target {
+            LinkTarget::DeviceInput(device, input) => {
+                let device = self.devices.get(device)?;
+                Some(device.data.input().get(*input))
+            }
+            LinkTarget::Output(output) => Some(self.outputs.get(output)?.state),
+        }
+    }
+    #[inline(always)]
+    pub fn get_link_start_state(&self, start: &LinkStart<IntId>) -> Option<bool> {
+        match start {
+            LinkStart::DeviceOutput(device, output) => {
+                let device = self.devices.get(device)?;
+                Some(device.data.output().get(*output))
+            }
+            LinkStart::Input(input) => Some(self.inputs.get(input)?.state),
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_link_target(
+        &self,
+        target: &LinkTarget<IntId>,
+        settings: &Settings,
+        view: &View,
+    ) -> Option<(Pin, bool)> {
+        match target {
+            LinkTarget::DeviceInput(device, input) => {
+                let device = self.devices.get(device)?;
+                Some((
+                    device.input_pins(settings, view)[*input].clone(),
+                    device.data.input().get(*input),
+                ))
+            }
+            LinkTarget::Output(output) => {
+                let output = self.outputs.get(output)?;
+                Some((self.output_pin(output, settings, view), output.state))
+            }
+        }
+    }
+    #[inline(always)]
+    pub fn get_link_start(
+        &self,
+        start: &LinkStart<IntId>,
+        settings: &Settings,
+        view: &View,
+    ) -> Option<(Pin, bool)> {
+        match start {
+            LinkStart::DeviceOutput(device, output) => {
+                let device = self.devices.get(device)?;
+                Some((
+                    device.output_pins(settings, view)[*output].clone(),
+                    device.data.output().get(*output),
+                ))
+            }
+            LinkStart::Input(input) => {
+                let input = self.inputs.get(input)?;
+                Some((self.input_pin(input, settings, view), input.state))
+            }
+        }
     }
 }
+
+// #[derive(Debug, Clone, Serialize, Deserialize)]
+// pub struct SceneLayout {
+//     pub inputs: HashMap<IntId, InputLayout>,
+//     pub outputs: HashMap<IntId, OutputLayout>,
+//     pub devices: HashMap<IntId, DeviceLayout>,
+// }
