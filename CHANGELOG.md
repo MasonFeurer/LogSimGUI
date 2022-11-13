@@ -1,0 +1,11 @@
+221113:
+- added this change-log
+- support light mode in scene input/output name editor
+- add name editor for scene outputs
+- fixed placing presets being offset
+- fixed placing inputs/outputs being offset
+- correctly scale device name size
+- better errors for reloading missing settings
+- added deleting and modifying chips in the Presets menu
+- can now delete links
+- added input/output groupings

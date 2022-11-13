@@ -234,6 +234,10 @@ impl Presets {
             eprintln!("can't remove default category");
             return false;
         }
+        if self.cats[idx].1.presets.len() != 0 {
+            eprintln!("can't remove a category with presets in it");
+            return false;
+        }
 
         self.cats.remove(idx);
         key_sort(&mut self.cats);
@@ -257,7 +261,7 @@ impl Presets {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PresetSource {
     BuiltIn,
-    Scene(/*crate::scene::SceneLayout*/),
+    Scene(Option<crate::scene::SceneLayout>),
     // Code(), // design chips with some coding language?
 }
 

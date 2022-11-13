@@ -1,7 +1,10 @@
 use crate::preset::DevicePreset;
+use crate::scene::{Group, Scene};
 use crate::settings::Settings;
 use crate::*;
 use eframe::egui::*;
+
+pub const GROUP_COLOR: Color = Color::from_gray(150);
 
 #[derive(Clone)]
 pub struct View {
@@ -19,6 +22,18 @@ impl View {
     }
 
     #[inline(always)]
+    pub fn unmap_pos(&self, pos: Pos2) -> Pos2 {
+        Pos2 {
+            x: ((pos.x - self.offset.x - self.origin.x) / self.scale()) + self.origin.x,
+            y: ((pos.y - self.offset.y - self.origin.y) / self.scale()) + self.origin.y,
+        }
+    }
+
+    #[inline(always)]
+    pub fn map_x(&self, x: f32) -> f32 {
+        (x - self.origin.x) * self.scale() + self.origin.x + self.offset.x
+    }
+    #[inline(always)]
     pub fn map_y(&self, y: f32) -> f32 {
         (y - self.origin.y) * self.scale() + self.origin.y + self.offset.y
     }
@@ -26,8 +41,8 @@ impl View {
     #[inline(always)]
     pub fn map_pos(&self, pos: Pos2) -> Pos2 {
         Pos2 {
-            x: (pos.x - self.origin.x) * self.scale() + self.origin.x + self.offset.x,
-            y: (pos.y - self.origin.y) * self.scale() + self.origin.y + self.offset.y,
+            x: self.map_x(pos.x),
+            y: self.map_y(pos.y),
         }
     }
     #[inline(always)]
@@ -129,14 +144,14 @@ impl<'a> Graphics<'a> {
             pointer_pos,
 
             shapes: Vec::new(),
-            next_id: 0,
+            next_id: 2848,
         }
     }
 
     #[inline(always)]
     pub fn create_response(&mut self, rect: Rect, hovered: bool, sense: Sense) -> Response {
         let id = Id::new(self.next_id);
-        self.next_id += 1;
+        self.next_id += 53;
         self.ui.interact_with_hovered(rect, hovered, id, sense)
     }
 
@@ -160,6 +175,27 @@ impl<'a> Graphics<'a> {
             self.shapes.push(Shape::rect_stroke(rect, rounding, stroke));
         }
         self.create_response(rect, hovered, Sense::click_and_drag())
+    }
+
+    pub fn static_rect(
+        &mut self,
+        rect: Rect,
+        rounding: f32,
+        color: [Color; 2],
+        stroke: Option<ShowStroke>,
+    ) {
+        let hovered = rect.contains(self.pointer_pos);
+
+        let color = if hovered { color[1] } else { color[0] };
+        let rounding = Rounding::same(rounding);
+        self.shapes.push(Shape::rect_filled(rect, rounding, color));
+
+        if let Some(ShowStroke { color, width }) = stroke {
+            let color = if hovered { color[1] } else { color[0] };
+            let width = if hovered { width[1] } else { width[0] };
+            let stroke = Stroke { width, color };
+            self.shapes.push(Shape::rect_stroke(rect, rounding, stroke));
+        }
     }
 
     pub fn line(&mut self, from: Pos2, to: Pos2, width: f32, stroke: ShowStroke) -> Response {
@@ -247,6 +283,37 @@ pub fn show_pin(g: &mut Graphics, s: &Settings, pin: &Pin, state: bool) -> Respo
     }
     rs
 }
+pub fn show_group(
+    g: &mut Graphics,
+    s: &Settings,
+    group: &Group,
+    states: &[bool],
+    center: f32,
+) -> Response {
+    let col_w = s.scene_pin_col_w;
+    let text = Scene::group_value(group, states);
+    let size = 20.0;
+    let rs = g.rect(
+        Rect::from_min_size(
+            Pos2::new(center - col_w * 0.5, group.bottom),
+            Vec2::new(col_w, size),
+        ),
+        0.0,
+        [GROUP_COLOR; 2],
+        Some(ShowStroke {
+            color: [Color::TRANSPARENT, Color::WHITE],
+            width: [1.0, 1.0],
+        }),
+    );
+    g.text(
+        Pos2::new(center, group.bottom + size * 0.5),
+        size,
+        &text,
+        Color::WHITE,
+        Align2::CENTER_CENTER,
+    );
+    rs
+}
 
 #[derive(Clone, Copy)]
 pub enum DeviceItem {
@@ -286,7 +353,7 @@ pub fn show_device_preset(
     };
     let _ = g.text(
         pos + size * 0.5,
-        s.device_name_font_size,
+        s.device_name_font_size * view.scale(),
         &preset.name,
         name_color,
         Align2::CENTER_CENTER,
@@ -325,7 +392,7 @@ pub fn show_device(
     };
     g.text(
         pos + size * 0.5,
-        s.device_name_font_size,
+        s.device_name_font_size * view.scale(),
         &device.name,
         name_color,
         Align2::CENTER_CENTER,
@@ -364,12 +431,14 @@ pub enum SceneItem {
     Device(IntId),
     DeviceInput(IntId, usize),
     DeviceOutput(IntId, usize),
-    InputPin(IntId),
-    OutputPin(IntId),
-    InputBulb(IntId),
-    OutputBulb(IntId),
-    InputLink(IntId, usize),
     DeviceOutputLink(IntId, usize, usize),
+    InputPin(IntId),
+    InputBulb(IntId),
+    InputLink(IntId, usize),
+    InputGroup(IntId),
+    OutputPin(IntId),
+    OutputBulb(IntId),
+    OutputGroup(IntId),
 }
 
 pub fn show_scene(
@@ -448,6 +517,18 @@ pub fn show_scene(
         let scene_item = SceneItem::InputPin(*input_id);
         handle_sub_response(&mut result, pin_rs, scene_item);
 
+        if input.group_member.is_some() {
+            let _ = g.static_rect(
+                Rect::from_min_size(
+                    pin.origin - Vec2::new(col_w, col_w * 0.5),
+                    Vec2::splat(col_w),
+                ),
+                0.0,
+                [GROUP_COLOR; 2],
+                None,
+            );
+        }
+
         let scene_item = SceneItem::InputBulb(*input_id);
         let bulb_rs = g.circle(
             pin.origin - Vec2::new(col_w * 0.5, 0.0),
@@ -462,7 +543,7 @@ pub fn show_scene(
 
         // DRAW LINKS FROM INPUT
         let link_start = pin.tip(s);
-        for (link_idx, target) in input.links.iter().rev().enumerate() {
+        for (link_idx, target) in input.links.iter().enumerate() {
             let Some(pin) = scene.get_link_target_pin(&target.wrap(), s, view) else {
             	dead_links.push((LinkStart::Input(*input_id), link_idx));
         		continue
@@ -472,6 +553,18 @@ pub fn show_scene(
             let scene_item = SceneItem::InputLink(*input_id, link_idx);
             handle_sub_response(&mut result, link_rs, scene_item);
         }
+    }
+
+    // DRAW INPUT GROUPS
+    for (group_id, group) in &scene.input_groups {
+        let center = g.rect.min.x + col_w * 0.5;
+        let mut states = Vec::with_capacity(group.members.len());
+        for member_id in &group.members {
+            states.push(scene.inputs.get(member_id).unwrap().state);
+        }
+        let group_rs = show_group(g, s, group, &states, center);
+        let scene_item = SceneItem::InputGroup(*group_id);
+        handle_sub_response(&mut result, group_rs, scene_item);
     }
 
     // DRAW SCENE OUTPUTS
@@ -493,6 +586,18 @@ pub fn show_scene(
             }),
         );
         handle_sub_response(&mut result, bulb_rs, scene_item);
+    }
+
+    // DRAW OUTPUT GROUPS
+    for (group_id, group) in &scene.output_groups {
+        let center = g.rect.max.x - col_w * 0.5;
+        let mut states = Vec::with_capacity(group.members.len());
+        for member_id in &group.members {
+            states.push(scene.outputs.get(member_id).unwrap().state);
+        }
+        let group_rs = show_group(g, s, group, &states, center);
+        let scene_item = SceneItem::OutputGroup(*group_id);
+        handle_sub_response(&mut result, group_rs, scene_item);
     }
     result
 }

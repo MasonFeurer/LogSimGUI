@@ -1,8 +1,12 @@
 use crate::graphics::{Graphics, SceneItem, View};
-use crate::preset::{ChipPreset, DevicePreset, PresetData};
+use crate::preset::{ChipPreset, DevicePreset, PresetData, PresetSource};
 use crate::settings::Settings;
 use crate::*;
 use eframe::egui::*;
+
+struct EditPopup {
+    item: SceneItem,
+}
 
 struct CreatePreset {
     name: String,
@@ -26,7 +30,6 @@ impl CreatePreset {
 #[derive(Clone)]
 struct PresetPicker {
     pub pos: Pos2,
-    pub response_rect: Rect,
     pub minimized: bool,
     pub cat: Option<IntId>,
 }
@@ -34,20 +37,9 @@ impl PresetPicker {
     pub fn new(pos: Pos2) -> Self {
         Self {
             pos,
-            response_rect: Rect::from_min_max(Pos2::ZERO, Pos2::ZERO),
             minimized: false,
             cat: None,
         }
-    }
-}
-
-#[derive(Clone)]
-struct EditIo {
-    id: IntId,
-}
-impl EditIo {
-    fn new(id: IntId) -> Self {
-        Self { id }
     }
 }
 
@@ -60,15 +52,15 @@ pub struct App {
     paused: bool,
     speed: u32,
 
-    hovered: Option<SceneItem>,
-    scene_hovered: bool,
     pointer_pos: Pos2,
+    scene_hovered: bool,
+    hovered_item: Option<SceneItem>,
+    edit_popup: Option<EditPopup>,
 
     link_start: Option<LinkStart<IntId>>,
     create_preset: CreatePreset,
     preset_picker: PresetPicker,
     held_presets: Vec<(IntId, IntId)>,
-    edit_input: Option<EditIo>,
 }
 impl App {
     pub fn new() -> Self {
@@ -86,15 +78,15 @@ impl App {
             paused: false,
             speed: 1,
 
-            hovered: None,
             pointer_pos: Pos2::ZERO,
             scene_hovered: false,
+            hovered_item: None,
+            edit_popup: None,
 
             link_start: None,
             create_preset: CreatePreset::default(),
             preset_picker,
             held_presets: Vec::new(),
-            edit_input: None,
         }
     }
 
@@ -126,7 +118,7 @@ impl App {
             data: PresetData::Chip(chip),
             name,
             color: color.to_array(),
-            src: preset::PresetSource::BuiltIn, // TODO PresetSource::Scene
+            src: preset::PresetSource::Scene(Some(self.scene.layout())),
         };
 
         self.presets.mut_cat(cat).unwrap().add_preset(preset);
@@ -253,18 +245,17 @@ impl App {
         }
     }
 
-    pub fn show_presets(&mut self, _ctx: &Context, ui: &mut Ui) {
+    pub fn show_presets(&mut self, ctx: &Context, ui: &mut Ui) {
+        let pressed_del = ctx.input().key_pressed(Key::Backspace);
+
         ui.horizontal(|ui| {
-            ui.heading("Preset settings");
-            if ui.button("save").clicked() {
-                settings::save_presets(&self.presets);
-            }
-            if ui.button("load").clicked() {
+            ui.heading("Preset Settings");
+            if ui.button("reload").clicked() {
                 if let Some(presets) = settings::load_presets() {
                     self.presets = presets;
                 }
             }
-            if ui.button("merge").clicked() {
+            if ui.button("import").clicked() {
                 if let Some(file) = rfd::FileDialog::new().set_directory("/").pick_file() {
                     let bytes = std::fs::read(file).unwrap();
                     let presets = settings::decode_presets(&bytes).unwrap();
@@ -273,6 +264,53 @@ impl App {
             }
         });
         ui.separator();
+
+        let mut del_cat = None;
+        let mut del_preset = None;
+        let mut load_preset = None;
+        for (cat_id, cat) in &self.presets.cats {
+            let rs = ui.collapsing(&cat.name, |ui| {
+                for (preset_id, preset) in &cat.presets {
+                    let rs = ui.button(&preset.name);
+                    if rs.hovered() && pressed_del {
+                        del_preset = Some((*cat_id, *preset_id));
+                    }
+                    if rs.clicked() {
+                        load_preset = Some((*cat_id, *preset_id));
+                    }
+                }
+            });
+            if rs.header_response.hovered() && pressed_del {
+                del_cat = Some(*cat_id);
+            }
+        }
+        if let Some(id) = del_cat {
+            self.presets.remove_cat(id);
+        }
+        if let Some((cat_id, preset_id)) = del_preset {
+            self.presets
+                .mut_cat(cat_id)
+                .unwrap()
+                .remove_preset(preset_id);
+        }
+        if let Some((cat_id, preset_id)) = load_preset {
+            let preset = self
+                .presets
+                .get_cat(cat_id)
+                .unwrap()
+                .get_preset(preset_id)
+                .unwrap()
+                .clone();
+            let PresetSource::Scene(Some(layout)) = preset.src.clone() else {
+            	eprintln!("this preset doesn't have a scene source!");
+            	return;
+            };
+            let [r, g, b, a] = preset.color;
+            self.scene.load_layout(layout);
+            self.create_preset.name = preset.name;
+            self.create_preset.color = Color::from_rgba_premultiplied(r, g, b, a);
+            self.create_preset.cat = cat_id;
+        }
     }
 
     pub fn show_cat_picker(&mut self, ctx: &Context, ui: &mut Ui) {
@@ -398,12 +436,8 @@ impl App {
 
         let mut g = Graphics::new(ui, painter_rs.rect, self.pointer_pos);
 
-        // Frame::none().fill(Color::GREEN).show(ui, |ui| {
-        //     self.show_scene(ctx, ui);
-        // });
-
         self.show_scene(ctx, &mut g);
-        painter.extend(g.shapes.drain(..).collect());
+        painter.extend(g.shapes.drain(..));
 
         let _pressed_num: Option<usize> = match () {
             _ if ctx.input().key_pressed(Key::Num0) => Some(0),
@@ -479,59 +513,126 @@ impl App {
             let preset = cat.get_preset(*preset_id).unwrap();
 
             graphics::show_device_preset(&mut g, &self.settings, &self.view, pos, preset);
-            pos.y += preset.size(&self.settings).y;
+            pos.y += preset.size(&self.settings).y * self.view.scale();
         }
 
-        // SHOW INPUT EDITOR
-        if let Some(EditIo { id }) = self.edit_input.clone() {
-            if let Some(input) = self.scene.inputs.get(&id) {
-                let pin_rect = self
-                    .scene
-                    .input_pin(input, &self.settings, &self.view)
-                    .rect(&self.settings);
-
-                let rect = Rect::from_min_size(pin_rect.right_top(), Vec2::new(100.0, 30.0));
-
-                // g.shapes.push(Shape::rect_stroke(
-                //     rect,
-                //     Rounding::same(3.0),
-                //     Stroke::new(1.0, Color::from_gray(100)),
-                // ));
-
-                let input = self.scene.inputs.get_mut(&id).unwrap();
-                let mut child_ui = g.ui.child_ui(rect, g.ui.layout().clone());
-                let rs = Frame::menu(child_ui.style())
-                    .fill(Color::BLACK)
-                    .show(&mut child_ui, |ui| {
-                        // child_ui.add_space(5.0);
-                        ui.horizontal(|ui| {
-                            ui.label("name: ");
-                            ui.text_edit_singleline(&mut input.name);
-                        });
-                    })
-                    .response;
-
-                self.edit_input = Some(EditIo { id });
-
-                if ctx.input().pointer.primary_clicked() && !rs.hovered {
-                    self.edit_input = None;
-                }
-            } else {
-                self.edit_input = None;
-            }
-        }
-
+        // SHOW PRESET PICKER
         self.show_preset_picker(ctx, &mut g);
 
         let shapes = g.shapes;
         painter.extend(shapes);
+
+        // SHOW EDIT POPUP
+        let Some(EditPopup { item }) = &self.edit_popup else {
+        	return
+        };
+        let col_w = self.settings.scene_pin_col_w;
+        let rect = match item {
+            SceneItem::InputBulb(id) => {
+                let input = self.scene.inputs.get(id).unwrap();
+                let size = Vec2::new(100.0, 20.0);
+                let pos = Pos2::new(self.scene.rect.min.x + col_w, input.y_pos);
+                Rect::from_min_size(pos, size)
+            }
+            SceneItem::OutputBulb(id) => {
+                let output = self.scene.outputs.get(id).unwrap();
+                let size = Vec2::new(100.0, 20.0);
+                let pos = Pos2::new(self.scene.rect.max.x - col_w - size.x, output.y_pos);
+                Rect::from_min_size(pos, size)
+            }
+            SceneItem::InputGroup(id) => {
+                let group = self.scene.input_groups.get(id).unwrap();
+                let size = Vec2::new(100.0, 60.0);
+                let pos = Pos2::new(
+                    self.scene.rect.min.x + col_w,
+                    group.bottom - size.y * 0.5 + 10.0 + col_w * 0.5,
+                );
+                Rect::from_min_size(pos, size)
+            }
+            SceneItem::OutputGroup(id) => {
+                let group = self.scene.output_groups.get(id).unwrap();
+                let size = Vec2::new(100.0, 60.0);
+                let pos = Pos2::new(
+                    self.scene.rect.max.x - col_w - size.x,
+                    group.bottom - size.y * 0.5 + 10.0 + col_w * 0.5,
+                );
+                Rect::from_min_size(pos, size)
+            }
+            _ => unreachable!(),
+        };
+        let mut child_ui = ui.child_ui(rect, ui.layout().clone());
+        let rs = Frame::menu(child_ui.style()).show(&mut child_ui, |ui| match item.clone() {
+            SceneItem::InputBulb(id) => {
+                let input = self.scene.inputs.get_mut(&id).unwrap();
+
+                ui.horizontal(|ui| {
+                    ui.label("name: ");
+                    ui.text_edit_singleline(&mut input.name);
+                });
+            }
+            SceneItem::OutputBulb(id) => {
+                let output = self.scene.outputs.get_mut(&id).unwrap();
+
+                ui.horizontal(|ui| {
+                    ui.label("name: ");
+                    ui.text_edit_singleline(&mut output.name);
+                });
+            }
+            SceneItem::InputGroup(id) => {
+                let group = self.scene.input_groups.get_mut(&id).unwrap();
+                ui.horizontal(|ui| {
+                    ui.label("signed: ");
+                    ui.checkbox(&mut group.signed, "");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("display: ");
+                    let display = if group.hex { "hex" } else { "decimal" };
+                    if ui.button(display).clicked() {
+                        group.hex = !group.hex;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("lsb: ");
+                    let lsb = if group.lsb_top { "top" } else { "bottom" };
+                    if ui.button(lsb).clicked() {
+                        group.lsb_top = !group.lsb_top;
+                    }
+                });
+            }
+            SceneItem::OutputGroup(id) => {
+                let group = self.scene.output_groups.get_mut(&id).unwrap();
+                ui.horizontal(|ui| {
+                    ui.label("signed: ");
+                    ui.checkbox(&mut group.signed, "");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("display: ");
+                    let display = if group.hex { "hex" } else { "decimal" };
+                    if ui.button(display).clicked() {
+                        group.hex = !group.hex;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("lsb: ");
+                    let lsb = if group.lsb_top { "top" } else { "bottom" };
+                    if ui.button(lsb).clicked() {
+                        group.lsb_top = !group.lsb_top;
+                    }
+                });
+            }
+            _ => unreachable!(),
+        });
+        if !rs.response.hovered() && ctx.input().pointer.primary_clicked() {
+            self.edit_popup = None;
+        }
     }
 
     pub fn show_scene(&mut self, ctx: &Context, g: &mut Graphics) {
+        let pressed_del = ctx.input().key_pressed(Key::Backspace);
         let mut dead_links = Vec::new();
         let scene_rs =
             graphics::show_scene(g, &self.settings, &self.view, &self.scene, &mut dead_links);
-        self.hovered = scene_rs.as_ref().map(|(_, item)| item.clone());
+        self.hovered_item = scene_rs.as_ref().map(|(_, item)| item.clone());
 
         // HANDLE DEAD LINKS
         dead_links.sort_by(|a, b| a.1.cmp(&b.1).reverse());
@@ -560,7 +661,7 @@ impl App {
                     if rs.drag_delta() != Vec2::ZERO {
                         self.scene.drag_device(id, rs.drag_delta());
                     }
-                    if rs.hovered() && ctx.input().key_pressed(Key::Backspace) {
+                    if rs.hovered() && pressed_del {
                         self.scene.del_device(id);
                     }
                 }
@@ -573,11 +674,14 @@ impl App {
                         let state = self.scene.get_input(id).unwrap().state;
                         self.scene.set_input(id, !state);
                     }
-                    if rs.hovered() && ctx.input().key_pressed(Key::Backspace) {
+                    if rs.secondary_clicked() {
+                        self.edit_popup = Some(EditPopup { item });
+                    }
+                    if rs.hovered() && pressed_del {
                         self.scene.del_input(id);
                     }
-                    if rs.secondary_clicked() {
-                        self.edit_input = Some(EditIo::new(id));
+                    if ctx.input().key_pressed(Key::ArrowDown) {
+                        self.scene.stack_input(id, &self.settings);
                     }
                 }
                 SceneItem::InputPin(id) => {
@@ -585,12 +689,36 @@ impl App {
                         self.link_start = Some(LinkStart::Input(id));
                     }
                 }
+                SceneItem::InputLink(input_id, link_idx) => {
+                    if pressed_del {
+                        let links = &mut self.scene.inputs.get_mut(&input_id).unwrap().links;
+                        let link = links[link_idx].clone();
+                        links.remove(link_idx);
+                        self.scene.write_queue.push(link.wrap(), false);
+                    }
+                }
+                SceneItem::InputGroup(_) => {
+                    if rs.secondary_clicked() {
+                        self.edit_popup = Some(EditPopup { item });
+                    }
+                }
                 SceneItem::OutputBulb(id) => {
                     if rs.drag_delta() != Vec2::ZERO {
                         self.scene.drag_output(id, rs.drag_delta());
                     }
-                    if rs.hovered() && ctx.input().key_pressed(Key::Backspace) {
+                    if rs.hovered() && pressed_del {
                         self.scene.del_output(id);
+                    }
+                    if rs.secondary_clicked() {
+                        self.edit_popup = Some(EditPopup { item });
+                    }
+                    if ctx.input().key_pressed(Key::ArrowDown) {
+                        self.scene.stack_output(id, &self.settings);
+                    }
+                }
+                SceneItem::OutputGroup(_) => {
+                    if rs.secondary_clicked() {
+                        self.edit_popup = Some(EditPopup { item });
                     }
                 }
                 SceneItem::OutputPin(id) => {
@@ -641,7 +769,15 @@ impl App {
                         self.link_start = Some(LinkStart::DeviceOutput(device, output));
                     }
                 }
-                _ => {}
+                SceneItem::DeviceOutputLink(device_id, output_idx, link_idx) => {
+                    if pressed_del {
+                        let links =
+                            &mut self.scene.devices.get_mut(&device_id).unwrap().links[output_idx];
+                        let link = links[link_idx].clone();
+                        links.remove(link_idx);
+                        self.scene.write_queue.push(link, false);
+                    }
+                }
             }
         }
     }
@@ -652,7 +788,7 @@ impl App {
         } else {
             String::from("Presets")
         };
-        let size = Vec2::new(200.0, 20.0);
+        let header_size = Vec2::new(200.0, 20.0);
 
         // clamp position
         let pos = &mut self.preset_picker.pos;
@@ -661,10 +797,20 @@ impl App {
         pos.y = f32::max(pos.y, self.scene.rect.min.y);
         pos.y = f32::min(pos.y, self.scene.rect.max.y);
         self.settings.preset_picker_pos = (*pos).into();
-        let mut rect = Rect::from_min_size(*pos, size);
+        let header_rect = Rect::from_min_size(*pos, header_size);
 
-        // show impl
-        let mut show = |ui: &mut Ui| {
+        // show picker
+        let mut child_ui = g.ui.child_ui(header_rect, g.ui.layout().clone());
+        let frame_rs = Frame::menu(child_ui.style()).show(&mut child_ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(5.0);
+                ui.label(title);
+                ui.add_space(5.0);
+            });
+            if self.preset_picker.minimized {
+                return;
+            }
+
             if let Some(cat_id) = self.preset_picker.cat {
                 let cat = self.presets.get_cat(cat_id).unwrap();
 
@@ -690,41 +836,20 @@ impl App {
                     }
                 }
             }
-        };
+        });
 
-        // show picker
-        let mut child_ui = g.ui.child_ui(rect, g.ui.layout().clone());
-        let rs = CollapsingHeader::new(title)
-            .default_open(!self.preset_picker.minimized)
-            .show(&mut child_ui, |ui| {
-                let style = ui.style_mut();
-                style.visuals.widgets.hovered.bg_stroke = Stroke::none();
-                style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-                style.spacing.item_spacing = Vec2::ZERO;
-                show(ui);
-            });
-
-        if let Some(body_rs) = rs.body_response {
-            rect.max.y = body_rs.rect.max.y;
-            rect.max.x = body_rs.rect.max.x;
-        } else {
-            rect.max.x = rs.header_response.rect.max.x;
+        let header_rs = g.ui.interact(
+            header_rect,
+            Id::new("preset_picker"),
+            Sense::click_and_drag(),
+        );
+        if header_rs.clicked() {
+            self.preset_picker.minimized = !self.preset_picker.minimized;
         }
-
-        let rs =
-            g.ui.interact(rect, Id::new("preset_picker"), Sense::click_and_drag());
-        g.shapes.push(Shape::rect_stroke(
-            rect,
-            Rounding::same(3.0),
-            Stroke::new(1.0, Color::from_gray(100)),
-        ));
-
-        // drag picker
-        self.preset_picker.response_rect = rect;
-        if rect.contains(self.pointer_pos) {
+        self.preset_picker.pos += header_rs.drag_delta();
+        if frame_rs.response.rect.contains(self.pointer_pos) {
             self.scene_hovered = false;
         }
-        self.preset_picker.pos += rs.drag_delta();
     }
 }
 impl eframe::App for App {
@@ -784,7 +909,8 @@ impl eframe::App for App {
             let col_w = self.settings.scene_pin_col_w;
             let output_col_x = self.scene.rect.max.x - col_w;
             let input_col_x = self.scene.rect.min.x + col_w;
-            let Pos2 { x, y } = self.pointer_pos;
+            let x = self.pointer_pos.x;
+            let y = self.view.unmap_pos(self.pointer_pos).y;
 
             if x < input_col_x {
                 self.scene.add_input(IntId::new(), scene::Input::new(y));
@@ -796,7 +922,7 @@ impl eframe::App for App {
                 let mut held_presets = Vec::new();
                 std::mem::swap(&mut held_presets, &mut self.held_presets);
 
-                let mut pos = self.pointer_pos + Vec2::new(0.0, 10.0);
+                let mut pos = self.view.unmap_pos(self.pointer_pos + Vec2::new(0.0, 10.0));
                 for (cat_id, preset_id) in held_presets {
                     self.place_preset(cat_id, preset_id, pos);
 
@@ -830,7 +956,7 @@ impl eframe::App for App {
             }
 
             if let Some((cat_id, id)) = place_preset {
-                self.place_preset(cat_id, id, self.pointer_pos);
+                self.place_preset(cat_id, id, self.view.unmap_pos(self.pointer_pos));
             }
         });
 

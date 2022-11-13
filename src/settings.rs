@@ -3,7 +3,6 @@ use crate::Color;
 use eframe::egui::*;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use std::io;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -16,17 +15,17 @@ pub fn config_dir() -> Option<PathBuf> {
     config_dir.push("logic-sim-gui");
     Some(config_dir)
 }
-pub fn save_config(name: &str, bytes: &[u8]) -> io::Result<()> {
+pub fn save_config(name: &str, bytes: &[u8]) -> Result<(), String> {
     let mut path = config_dir().unwrap();
     let _ = std::fs::create_dir(&path);
     path.push(name);
-    std::fs::write(path, bytes)
+    std::fs::write(&path, bytes).map_err(|err| format!("error saving path {:?} : {:?}", path, err))
 }
-pub fn load_config(name: &str) -> io::Result<Vec<u8>> {
+pub fn load_config(name: &str) -> Result<Vec<u8>, String> {
     let mut path = config_dir().unwrap();
     let _ = std::fs::create_dir(&path);
     path.push(name);
-    std::fs::read(path)
+    std::fs::read(&path).map_err(|err| format!("error loading path {:?} : {:?}", path, err))
 }
 
 pub fn reveal_dir(dir: &str) -> Result<(), String> {

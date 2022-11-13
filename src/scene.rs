@@ -8,6 +8,20 @@ use hashbrown::HashMap;
 
 pub use chip::Chip;
 
+pub fn rand_color() -> Color {
+    #[rustfmt::skip]
+    let pool = [
+        Color::from_rgb(  0,   0, 255),
+        Color::from_rgb(  0, 255,   0),
+        Color::from_rgb(  0, 255, 255),
+        Color::from_rgb(255,   0,   0),
+        Color::from_rgb(255,   0, 255),
+        Color::from_rgb(255, 255,   0),
+        Color::from_rgb(255, 255, 255),
+    ];
+    pool[fastrand::usize(0..pool.len())]
+}
+
 // :WRITE
 #[derive(Debug, Clone)]
 pub struct Write<T> {
@@ -69,7 +83,7 @@ pub struct SetOutput {
 }
 
 // :COMBGATE
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CombGate {
     pub input: BitField,
     pub output: BitField,
@@ -220,12 +234,13 @@ impl Device {
 }
 
 // :IO
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Input {
     pub name: String,
     pub y_pos: f32,
     pub state: bool,
     pub links: Vec<DeviceInput<IntId>>,
+    pub group_member: Option<IntId>,
 }
 impl Input {
     pub fn new(y_pos: f32) -> Self {
@@ -234,15 +249,17 @@ impl Input {
             y_pos,
             state: false,
             links: Vec::new(),
+            group_member: None,
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Output {
     pub name: String,
     pub y_pos: f32,
     pub state: bool,
+    pub group_member: Option<IntId>,
 }
 impl Output {
     pub fn new(y_pos: f32) -> Self {
@@ -250,6 +267,7 @@ impl Output {
             name: String::new(),
             y_pos,
             state: false,
+            group_member: None,
         }
     }
 }
@@ -263,6 +281,9 @@ pub struct Scene {
     pub inputs: HashMap<IntId, Input>,
     pub outputs: HashMap<IntId, Output>,
     pub devices: HashMap<IntId, Device>,
+
+    pub input_groups: HashMap<IntId, Group>,
+    pub output_groups: HashMap<IntId, Group>,
 }
 impl Scene {
     pub fn new() -> Self {
@@ -273,6 +294,52 @@ impl Scene {
             inputs: HashMap::new(),
             outputs: HashMap::new(),
             devices: HashMap::new(),
+
+            input_groups: HashMap::new(),
+            output_groups: HashMap::new(),
+        }
+    }
+
+    pub fn load_layout(&mut self, layout: SceneLayout) {
+        self.write_queue = WriteQueue::new();
+        self.inputs = layout.inputs;
+        self.outputs = layout.outputs;
+        self.devices.clear();
+        for (id, device) in layout.devices {
+            self.devices.insert(id, device.to_device());
+        }
+    }
+
+    pub fn layout(&self) -> SceneLayout {
+        let mut devices = HashMap::with_capacity(self.devices.len());
+        for (id, device) in &self.devices {
+            let data = match &device.data {
+                DeviceData::CombGate(e) => DeviceDataLayout::CombGate(e.clone()),
+                DeviceData::Chip(e) => DeviceDataLayout::Chip {
+                    input: e.input,
+                    output: e.output,
+                    input_links: e.input_links.clone(),
+                    devices: e.devices.clone(),
+                },
+            };
+            devices.insert(
+                *id,
+                DeviceLayout {
+                    pos: device.pos.into(),
+                    data,
+                    links: device.links.clone(),
+                    name: device.name.clone(),
+                    color: device.color.to_array(),
+
+                    input_presets: device.input_presets.clone(),
+                    output_presets: device.output_presets.clone(),
+                },
+            );
+        }
+        SceneLayout {
+            inputs: self.inputs.clone(),
+            outputs: self.outputs.clone(),
+            devices,
         }
     }
 
@@ -312,6 +379,40 @@ impl Scene {
                     self.write_queue.push(target.clone(), state);
                 }
             }
+        }
+    }
+
+    pub fn group_value(group: &Group, states: &[bool]) -> String {
+        let mut value: i64 = 0;
+        let mut bit_value: i64 = 1;
+        let mut last_idx = 0;
+
+        if group.lsb_top {
+            for idx in 0..group.members.len() - 1 {
+                if states[idx] {
+                    value += bit_value;
+                }
+                bit_value *= 2;
+            }
+            last_idx = group.members.len() - 1;
+        } else {
+            for idx in (1..group.members.len()).rev() {
+                if states[idx] {
+                    value += bit_value;
+                }
+                bit_value *= 2;
+            }
+        }
+        if states[last_idx] {
+            if group.signed {
+                bit_value *= -1;
+            }
+            value += bit_value;
+        }
+        if group.hex {
+            format!("{:X}", value)
+        } else {
+            format!("{}", value)
         }
     }
 }
@@ -375,15 +476,87 @@ impl Scene {
     }
 
     pub fn drag_input(&mut self, id: IntId, drag: Vec2) {
-        self.inputs.get_mut(&id).unwrap().y_pos += drag.y;
+        let input = self.inputs.get_mut(&id).unwrap();
+        input.y_pos += drag.y;
+        if let Some(group_id) = input.group_member {
+            let group = self.input_groups.get_mut(&group_id).unwrap();
+            group.bottom += drag.y;
+            for member_id in group.members.clone() {
+                if member_id == id {
+                    continue;
+                }
+                self.inputs.get_mut(&member_id).unwrap().y_pos += drag.y;
+            }
+        }
     }
 
     pub fn del_input(&mut self, id: IntId) {
-        self.inputs.remove(&id).unwrap();
+        let group_member = self.inputs.get(&id).unwrap().group_member;
+        let Some(group_id) = group_member else {
+        	self.inputs.remove(&id).unwrap();
+        	return;
+        };
+        let members = self.input_groups.get(&group_id).unwrap().members.clone();
+        for member_id in members {
+            self.inputs.remove(&member_id);
+        }
+        self.input_groups.remove(&group_id);
     }
 
     pub fn get_input(&self, id: IntId) -> Option<&Input> {
         self.inputs.get(&id)
+    }
+
+    pub fn stack_input(&mut self, id: IntId, settings: &Settings) {
+        let input = self.inputs.get(&id).unwrap();
+        let state = input.state;
+        let name = input.name.clone();
+        let y_pos = input.y_pos;
+
+        fn new_name(name: &str, i: usize) -> String {
+            if name.trim().is_empty() {
+                return String::new();
+            }
+            format!("{}{}", name, i)
+        }
+
+        let sp = settings.scene_pin_col_w;
+        if let Some(group_id) = input.group_member {
+            let group = self.input_groups.get_mut(&group_id).unwrap();
+            let first_input = self.inputs.get(&group.members[0]).unwrap();
+            let name = new_name(&first_input.name, group.members.len());
+
+            let new_id = IntId::new();
+            let new_y_pos = group.bottom + sp * 0.5;
+            group.bottom += sp;
+            group.members.push(new_id);
+
+            let input = Input {
+                y_pos: new_y_pos,
+                group_member: Some(group_id),
+                links: Vec::new(),
+                name,
+                state,
+            };
+            self.inputs.insert(new_id, input);
+        } else {
+            let group_id = IntId::new();
+            let new_id = IntId::new();
+            let group_bottom = y_pos + sp * 1.5;
+            self.input_groups
+                .insert(group_id, Group::new(vec![id, new_id], group_bottom));
+            self.inputs.get_mut(&id).unwrap().group_member = Some(group_id);
+
+            let name = new_name(&name, 1);
+            let input = Input {
+                y_pos: y_pos + sp,
+                group_member: Some(group_id),
+                links: Vec::new(),
+                name,
+                state,
+            };
+            self.inputs.insert(new_id, input);
+        }
     }
 }
 // :SCENE OUTPUTS
@@ -403,11 +576,81 @@ impl Scene {
     }
 
     pub fn drag_output(&mut self, id: IntId, drag: Vec2) {
-        self.outputs.get_mut(&id).unwrap().y_pos += drag.y;
+        let output = self.outputs.get_mut(&id).unwrap();
+        output.y_pos += drag.y;
+        if let Some(group_id) = output.group_member {
+            let group = self.output_groups.get_mut(&group_id).unwrap();
+            group.bottom += drag.y;
+            for member_id in group.members.clone() {
+                if member_id == id {
+                    continue;
+                }
+                self.outputs.get_mut(&member_id).unwrap().y_pos += drag.y;
+            }
+        }
     }
 
     pub fn del_output(&mut self, id: IntId) {
-        self.outputs.remove(&id).unwrap();
+        let group_member = self.outputs.get(&id).unwrap().group_member;
+        let Some(group_id) = group_member else {
+        	self.outputs.remove(&id).unwrap();
+        	return;
+        };
+        let members = self.output_groups.get(&group_id).unwrap().members.clone();
+        for member_id in members {
+            self.outputs.remove(&member_id);
+        }
+        self.output_groups.remove(&group_id);
+    }
+
+    pub fn stack_output(&mut self, id: IntId, settings: &Settings) {
+        let output = self.outputs.get(&id).unwrap();
+        let state = output.state;
+        let name = output.name.clone();
+        let y_pos = output.y_pos;
+
+        fn new_name(name: &str, i: usize) -> String {
+            if name.trim().is_empty() {
+                return String::new();
+            }
+            format!("{}{}", name, i)
+        }
+
+        let sp = settings.scene_pin_col_w;
+        if let Some(group_id) = output.group_member {
+            let group = self.output_groups.get_mut(&group_id).unwrap();
+            let first_output = self.outputs.get(&group.members[0]).unwrap();
+            let name = new_name(&first_output.name, group.members.len());
+
+            let new_id = IntId::new();
+            let new_y_pos = group.bottom + sp * 0.5;
+            group.bottom += sp;
+            group.members.push(new_id);
+
+            let output = Output {
+                y_pos: new_y_pos,
+                group_member: Some(group_id),
+                name,
+                state,
+            };
+            self.outputs.insert(new_id, output);
+        } else {
+            let group_id = IntId::new();
+            let new_id = IntId::new();
+            let group_bottom = y_pos + sp * 1.5;
+            self.output_groups
+                .insert(group_id, Group::new(vec![id, new_id], group_bottom));
+            self.outputs.get_mut(&id).unwrap().group_member = Some(group_id);
+
+            let name = new_name(&name, 1);
+            let output = Output {
+                y_pos: y_pos + sp,
+                group_member: Some(group_id),
+                name,
+                state,
+            };
+            self.outputs.insert(new_id, output);
+        }
     }
 }
 // :SCENE ADD ITEMS
@@ -557,9 +800,82 @@ impl Scene {
     }
 }
 
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// pub struct SceneLayout {
-//     pub inputs: HashMap<IntId, InputLayout>,
-//     pub outputs: HashMap<IntId, OutputLayout>,
-//     pub devices: HashMap<IntId, DeviceLayout>,
-// }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DeviceDataLayout {
+    CombGate(CombGate),
+    Chip {
+        input: BitField,
+        output: BitField,
+        input_links: Vec<Vec<DeviceInput<usize>>>,
+        devices: Vec<chip::Device>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceLayout {
+    pub pos: [f32; 2],
+    pub data: DeviceDataLayout,
+    pub links: Vec<Vec<LinkTarget<IntId>>>,
+    pub name: String,
+    pub color: [u8; 4],
+
+    pub input_presets: Vec<PinPreset>,
+    pub output_presets: Vec<PinPreset>,
+}
+impl DeviceLayout {
+    pub fn to_device(&self) -> Device {
+        let data = match &self.data {
+            DeviceDataLayout::CombGate(e) => DeviceData::CombGate(e.clone()),
+            DeviceDataLayout::Chip {
+                input,
+                output,
+                input_links,
+                devices,
+            } => DeviceData::Chip(Chip {
+                write_queue: WriteQueue::new(),
+                input: input.clone(),
+                output: output.clone(),
+                input_links: input_links.clone(),
+                devices: devices.clone(),
+            }),
+        };
+        let [r, g, b, a] = self.color;
+        Device {
+            pos: self.pos.into(),
+            data,
+            links: self.links.clone(),
+            name: self.name.clone(),
+            color: Color::from_rgba_premultiplied(r, g, b, a),
+            input_presets: self.input_presets.clone(),
+            output_presets: self.output_presets.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneLayout {
+    pub inputs: HashMap<IntId, Input>,
+    pub outputs: HashMap<IntId, Output>,
+    pub devices: HashMap<IntId, DeviceLayout>,
+}
+
+// :GROUP
+#[derive(Debug, Clone)]
+pub struct Group {
+    pub lsb_top: bool,
+    pub signed: bool,
+    pub hex: bool,
+    pub bottom: f32,
+    pub members: Vec<IntId>,
+}
+impl Group {
+    pub fn new(members: Vec<IntId>, bottom: f32) -> Self {
+        Self {
+            lsb_top: true,
+            signed: true,
+            hex: false,
+            bottom,
+            members,
+        }
+    }
+}
