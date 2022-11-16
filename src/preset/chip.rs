@@ -1,4 +1,3 @@
-use super::PinPreset;
 use crate::*;
 use serde::{Deserialize, Serialize};
 
@@ -10,8 +9,8 @@ pub struct CombGate {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChipPreset {
-    pub inputs: Vec<PinPreset>,
-    pub outputs: Vec<PinPreset>,
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
     pub input_links: Vec<Vec<DeviceInput<usize>>>,
     pub comb_gates: Vec<CombGate>,
 }
@@ -33,37 +32,36 @@ impl ChipPreset {
 // New ID's are created for nested CombGates when they are unnested,
 // and all links pointing at that CombGate is changed to the new ID
 mod step1 {
-    use crate::preset::PinPreset;
     use crate::*;
     use hashbrown::HashMap;
 
     #[derive(Debug)]
     pub struct CombGate {
         pub table: TruthTable,
-        pub links: Vec<Vec<LinkTarget<IntId>>>,
+        pub links: Vec<Vec<LinkTarget<u64>>>,
     }
 
     #[derive(Debug)]
     pub struct Input {
         pub y_pos: f32,
-        pub preset: PinPreset,
-        pub links: Vec<DeviceInput<IntId>>,
+        pub name: String,
+        pub links: Vec<DeviceInput<u64>>,
     }
     #[derive(Debug)]
     pub struct Output {
         pub y_pos: f32,
-        pub preset: PinPreset,
+        pub name: String,
     }
 
     #[derive(Debug)]
     pub struct Scene {
-        pub inputs: HashMap<IntId, Input>,
-        pub outputs: HashMap<IntId, Output>,
-        pub comb_gates: HashMap<IntId, CombGate>,
+        pub inputs: HashMap<u64, Input>,
+        pub outputs: HashMap<u64, Output>,
+        pub comb_gates: HashMap<u64, CombGate>,
     }
 
     pub struct MovedChip {
-        pub input_links: Vec<Vec<DeviceInput<IntId>>>,
+        pub input_links: Vec<Vec<DeviceInput<u64>>>,
     }
 
     pub fn exec(scene: &scene::Scene) -> Scene {
@@ -85,7 +83,7 @@ mod step1 {
                 scene::DeviceData::Chip(chip) => {
                     let mut device_ids = Vec::with_capacity(chip.devices.len());
                     for _ in 0..chip.devices.len() {
-                        device_ids.push(IntId::new());
+                        device_ids.push(rand_id());
                     }
 
                     let input_links = chip
@@ -178,9 +176,7 @@ mod step1 {
                 }
                 let input = Input {
                     y_pos: input.y_pos,
-                    preset: PinPreset {
-                        name: input.name.clone(),
-                    },
+                    name: input.name.clone(),
                     links,
                 };
                 (*id, input)
@@ -194,9 +190,7 @@ mod step1 {
             .map(|(id, output)| {
                 let output = Output {
                     y_pos: output.y_pos,
-                    preset: PinPreset {
-                        name: output.name.clone(),
-                    },
+                    name: output.name.clone(),
                 };
                 (*id, output)
             })
@@ -210,17 +204,16 @@ mod step1 {
     }
 }
 
-// When the IntId's are mapped to indices
+// When the u64's are mapped to indices
 mod step2 {
     use super::CombGate;
-    use crate::preset::PinPreset;
     use crate::*;
     use hashbrown::HashMap;
 
     #[derive(Debug)]
     pub struct Scene {
-        pub inputs: Vec<PinPreset>,
-        pub outputs: Vec<PinPreset>,
+        pub inputs: Vec<String>,
+        pub outputs: Vec<String>,
         pub input_links: Vec<Vec<DeviceInput<usize>>>,
         pub comb_gates: Vec<CombGate>,
     }
@@ -233,7 +226,7 @@ mod step2 {
         scene_outputs.sort_by(|(_, a), (_, b)| a.y_pos.partial_cmp(&b.y_pos).unwrap());
 
         for (idx, (id, output)) in scene_outputs.into_iter().enumerate() {
-            outputs.push(output.preset.clone());
+            outputs.push(output.name.clone());
             output_indices.insert(*id, idx);
         }
 
@@ -245,7 +238,7 @@ mod step2 {
             comb_gate_indices.insert(*id, idx);
         }
 
-        let map_links = |links: &Vec<LinkTarget<IntId>>| -> Vec<LinkTarget<usize>> {
+        let map_links = |links: &Vec<LinkTarget<u64>>| -> Vec<LinkTarget<usize>> {
             let mut new_links = Vec::with_capacity(links.len());
 
             for link in links {
@@ -278,7 +271,7 @@ mod step2 {
 
         let inputs = scene_inputs
             .into_iter()
-            .map(|(_, input)| input.preset.clone())
+            .map(|(_, input)| input.name.clone())
             .collect();
 
         for (id, comb_gate) in &scene.comb_gates {

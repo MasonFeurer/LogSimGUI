@@ -1,5 +1,4 @@
 use crate::preset::Presets;
-use crate::Color;
 use eframe::egui::*;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -60,7 +59,7 @@ pub fn decode_presets(bytes: &[u8]) -> Result<Presets, String> {
         Ok(presets) => {
             // loaded presets must contain a cat of ID 0
             for (cat_id, _) in &presets.cats {
-                if cat_id.0 == 0 {
+                if *cat_id == 0 {
                     return Ok(presets);
                 }
             }
@@ -122,11 +121,13 @@ pub fn load_presets() -> Option<Presets> {
 pub struct Settings {
     pub dark_mode: bool,
     pub high_contrast: bool,
+    pub dev_options: bool,
     pub power_on_color: [u8; 4],
     pub power_off_color: [u8; 4],
 
     pub scene_pin_col_w: f32,
     pub scene_pin_size: [f32; 2],
+    pub link_width: f32,
 
     pub device_name_font_size: f32,
     pub device_pin_size: [f32; 2],
@@ -142,15 +143,17 @@ impl Settings {
         Self {
             dark_mode: true,
             high_contrast: true,
+            dev_options: false,
             power_on_color: [255, 0, 0, 255],
             power_off_color: [100, 100, 100, 255],
 
             scene_pin_col_w: 40.0,
-            scene_pin_size: [15.0, 8.0],
+            scene_pin_size: [15.0, 10.0],
+            link_width: 4.0,
 
             device_name_font_size: 16.0,
-            device_pin_size: [15.0, 8.0],
-            device_min_pin_spacing: 15.0,
+            device_pin_size: [15.0, 10.0],
+            device_min_pin_spacing: 14.0,
 
             show_device_id: false,
             show_write_queue: false,
@@ -163,7 +166,7 @@ impl Settings {
         if self.dark_mode {
             let mut vis = Visuals::dark();
             if self.high_contrast {
-                let color = Color::WHITE;
+                let color = Color32::WHITE;
                 vis.widgets.inactive.fg_stroke.color = color;
                 vis.widgets.noninteractive.fg_stroke.color = color;
                 vis.widgets.hovered.fg_stroke.color = color;
@@ -171,17 +174,25 @@ impl Settings {
             }
             vis
         } else {
-            Visuals::light()
+            let mut vis = Visuals::light();
+            if self.high_contrast {
+                let color = Color32::BLACK;
+                vis.widgets.inactive.fg_stroke.color = color;
+                vis.widgets.noninteractive.fg_stroke.color = color;
+                vis.widgets.hovered.fg_stroke.color = color;
+                vis.widgets.active.fg_stroke.color = color;
+            }
+            vis
         }
     }
 
     #[inline(always)]
-    pub fn power_color(&self, state: bool) -> Color {
+    pub fn power_color(&self, state: bool) -> Color32 {
         let [r, g, b, _] = match state {
             true => self.power_on_color,
             false => self.power_off_color,
         };
-        Color::from_rgb(r, g, b)
+        Color32::from_rgb(r, g, b)
     }
     pub fn device_size(&self, num_inputs: usize, num_outputs: usize, name: &str) -> Vec2 {
         let w = name.len() as f32 * self.device_name_font_size;
