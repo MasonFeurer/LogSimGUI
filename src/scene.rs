@@ -1,5 +1,6 @@
 pub mod chip;
 
+use crate::preset::{DevicePreset, PresetData};
 use crate::settings::Settings;
 use crate::*;
 use eframe::egui::Color32;
@@ -8,14 +9,14 @@ use hashbrown::HashMap;
 pub use chip::Chip;
 
 // :WRITE
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Write<T> {
     pub target: LinkTarget<T>,
     pub state: bool,
     pub delay: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WriteQueue<T>(pub Vec<Write<T>>);
 impl<T: Clone + PartialEq> WriteQueue<T> {
     #[inline(always)]
@@ -76,13 +77,12 @@ pub struct CombGate {
 }
 impl CombGate {
     pub fn new(table: TruthTable) -> Self {
-        let output = *table.map.get(0).unwrap_or(&BitField::empty(0));
         Self {
             input: BitField {
                 len: table.num_inputs,
                 data: 0,
             },
-            output,
+            output: table.get(0),
             table,
         }
     }
@@ -109,16 +109,16 @@ impl CombGate {
 }
 
 // :DDATA
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DeviceData {
     CombGate(CombGate),
     Chip(Chip),
 }
 impl DeviceData {
-    pub fn from_preset(preset: &preset::PresetData) -> Self {
+    pub fn from_preset(preset: &PresetData) -> Self {
         match preset {
-            preset::PresetData::CombGate(e) => Self::CombGate(CombGate::new(e.table.clone())),
-            preset::PresetData::Chip(e) => Self::Chip(Chip::from_preset(e)),
+            PresetData::CombGate(e) => Self::CombGate(CombGate::new(e.table.clone())),
+            PresetData::Chip(e) => Self::Chip(Chip::from_preset(e)),
         }
     }
 
@@ -146,7 +146,7 @@ impl DeviceData {
 }
 
 // :DEVICE
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     pub pos: Pos2,
     pub data: DeviceData,
@@ -158,23 +158,16 @@ pub struct Device {
     pub output_names: Vec<String>,
 }
 impl Device {
-    pub fn new(
-        pos: Pos2,
-        data: DeviceData,
-        name: String,
-        color: Color32,
-        input_names: Vec<String>,
-        output_names: Vec<String>,
-    ) -> Self {
+    pub fn from_preset(preset: &DevicePreset, pos: Pos2) -> Self {
+        let [r, g, b, a] = preset.color;
         Self {
             pos,
-            data,
-            links: vec![Vec::new(); output_names.len()],
-            name,
-            color,
-
-            input_names,
-            output_names,
+            data: DeviceData::from_preset(&preset.data),
+            links: vec![vec![]; preset.data.num_outputs()],
+            name: preset.name.clone(),
+            color: Color32::from_rgba_premultiplied(r, g, b, a),
+            input_names: preset.data.inputs().to_vec(),
+            output_names: preset.data.outputs().to_vec(),
         }
     }
 
@@ -228,7 +221,7 @@ impl Output {
 }
 
 // :SCENE DECL
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scene {
     pub rect: Rect,
     pub write_queue: WriteQueue<u64>,
@@ -252,53 +245,6 @@ impl Scene {
 
             input_groups: HashMap::new(),
             output_groups: HashMap::new(),
-        }
-    }
-
-    pub fn load_layout(&mut self, layout: SceneLayout) {
-        self.write_queue = WriteQueue::new();
-        self.inputs = layout.inputs;
-        self.outputs = layout.outputs;
-        self.input_groups = layout.input_groups;
-        self.output_groups = layout.output_groups;
-        self.devices.clear();
-        for (id, device) in layout.devices {
-            self.devices.insert(id, device.to_device());
-        }
-    }
-
-    pub fn layout(&self) -> SceneLayout {
-        let mut devices = HashMap::with_capacity(self.devices.len());
-        for (id, device) in &self.devices {
-            let data = match &device.data {
-                DeviceData::CombGate(e) => DeviceDataLayout::CombGate(e.clone()),
-                DeviceData::Chip(e) => DeviceDataLayout::Chip {
-                    input: e.input,
-                    output: e.output,
-                    input_links: e.input_links.clone(),
-                    devices: e.devices.clone(),
-                },
-            };
-            devices.insert(
-                *id,
-                DeviceLayout {
-                    pos: device.pos.into(),
-                    data,
-                    links: device.links.clone(),
-                    name: device.name.clone(),
-                    color: device.color.to_array(),
-
-                    input_names: device.input_names.clone(),
-                    output_names: device.output_names.clone(),
-                },
-            );
-        }
-        SceneLayout {
-            inputs: self.inputs.clone(),
-            outputs: self.outputs.clone(),
-            input_groups: self.input_groups.clone(),
-            output_groups: self.output_groups.clone(),
-            devices,
         }
     }
 
@@ -373,6 +319,25 @@ impl Scene {
         } else {
             format!("{}", value)
         }
+    }
+
+    pub fn inputs_sorted(&self) -> Vec<u64> {
+        let mut keys: Vec<_> = self.inputs.keys().cloned().collect();
+        keys.sort_by(|a, b| {
+            let a_y = self.inputs.get(a).unwrap().y_pos;
+            let b_y = self.inputs.get(b).unwrap().y_pos;
+            a_y.partial_cmp(&b_y).unwrap()
+        });
+        keys
+    }
+    pub fn outputs_sorted(&self) -> Vec<u64> {
+        let mut keys: Vec<_> = self.outputs.keys().cloned().collect();
+        keys.sort_by(|a, b| {
+            let a_y = self.outputs.get(a).unwrap().y_pos;
+            let b_y = self.outputs.get(b).unwrap().y_pos;
+            a_y.partial_cmp(&b_y).unwrap()
+        });
+        keys
     }
 }
 // :SCENE DEVICES
@@ -511,6 +476,20 @@ impl Scene {
             self.inputs.insert(new_id, input);
         }
     }
+
+    pub fn unstack_input(&mut self, id: u64) {
+        let Some(group_id) = self.inputs.get(&id).unwrap().group_member else {
+        	return
+        };
+        let group = self.input_groups.get_mut(&group_id).unwrap();
+        let member = group.members.pop().unwrap();
+
+        if group.members.len() == 1 {
+            self.input_groups.remove(&group_id);
+            self.inputs.get_mut(&id).unwrap().group_member = None;
+        }
+        self.inputs.remove(&member);
+    }
 }
 // :SCENE OUTPUTS
 impl Scene {
@@ -593,6 +572,20 @@ impl Scene {
             self.outputs.insert(new_id, output);
         }
     }
+
+    pub fn unstack_output(&mut self, id: u64) {
+        let Some(group_id) = self.outputs.get(&id).unwrap().group_member else {
+        	return
+        };
+        let group = self.output_groups.get_mut(&group_id).unwrap();
+        let member = group.members.pop().unwrap();
+
+        if group.members.len() == 1 {
+            self.output_groups.remove(&group_id);
+            self.outputs.get_mut(&id).unwrap().group_member = None;
+        }
+        self.outputs.remove(&member);
+    }
 }
 // :SCENE LINKS
 impl Scene {
@@ -634,9 +627,30 @@ impl Scene {
             LinkStart::Input(input) => Some(self.inputs.get(input)?.state),
         }
     }
+
+    pub fn remove_link_to(&mut self, target: LinkTarget<u64>) -> bool {
+        for (_, input) in &mut self.inputs {
+            for link_idx in 0..input.links.len() {
+                if input.links[link_idx].wrap() == target {
+                    input.links.remove(link_idx);
+                    return true;
+                }
+            }
+        }
+        for (_, device) in &mut self.devices {
+            for output_links in &mut device.links {
+                for link_idx in 0..output_links.len() {
+                    if output_links[link_idx] == target {
+                        output_links.remove(link_idx);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
 }
 
-// :GROUP
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Group {
     pub lsb_top: bool,
@@ -668,66 +682,4 @@ impl Group {
             .unwrap()
             .y_pos
     }
-}
-
-// :LAYOUT
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DeviceDataLayout {
-    CombGate(CombGate),
-    Chip {
-        input: BitField,
-        output: BitField,
-        input_links: Vec<Vec<DeviceInput<usize>>>,
-        devices: Vec<chip::Device>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeviceLayout {
-    pub pos: [f32; 2],
-    pub data: DeviceDataLayout,
-    pub links: Vec<Vec<LinkTarget<u64>>>,
-    pub name: String,
-    pub color: [u8; 4],
-
-    pub input_names: Vec<String>,
-    pub output_names: Vec<String>,
-}
-impl DeviceLayout {
-    pub fn to_device(&self) -> Device {
-        let data = match &self.data {
-            DeviceDataLayout::CombGate(e) => DeviceData::CombGate(e.clone()),
-            DeviceDataLayout::Chip {
-                input,
-                output,
-                input_links,
-                devices,
-            } => DeviceData::Chip(Chip {
-                write_queue: WriteQueue::new(),
-                input: input.clone(),
-                output: output.clone(),
-                input_links: input_links.clone(),
-                devices: devices.clone(),
-            }),
-        };
-        let [r, g, b, a] = self.color;
-        Device {
-            pos: self.pos.into(),
-            data,
-            links: self.links.clone(),
-            name: self.name.clone(),
-            color: Color32::from_rgba_premultiplied(r, g, b, a),
-            input_names: self.input_names.clone(),
-            output_names: self.output_names.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SceneLayout {
-    pub inputs: HashMap<u64, Input>,
-    pub input_groups: HashMap<u64, Group>,
-    pub output_groups: HashMap<u64, Group>,
-    pub outputs: HashMap<u64, Output>,
-    pub devices: HashMap<u64, DeviceLayout>,
 }

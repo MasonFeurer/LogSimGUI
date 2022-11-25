@@ -11,7 +11,7 @@ pub struct Device {
 }
 
 // :CHIP
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chip {
     pub write_queue: WriteQueue<usize>,
     pub input: BitField,

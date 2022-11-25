@@ -1,5 +1,6 @@
 pub mod chip;
 
+use crate::scene::Scene;
 use crate::settings::Settings;
 use crate::{BitField, TruthTable};
 pub use chip::ChipPreset;
@@ -12,33 +13,25 @@ pub struct CombGatePreset {
     pub table: TruthTable,
 }
 impl CombGatePreset {
-    pub fn from_scene(scene: &mut crate::scene::Scene) -> Result<Self, String> {
+    pub fn from_scene(scene: &mut Scene) -> Result<Self, String> {
         // create truth table from scene
         let num_inputs = scene.inputs.len();
         let num_outputs = scene.outputs.len();
 
-        let mut inputs: Vec<_> = scene.inputs.keys().cloned().collect();
-        let mut outputs: Vec<_> = scene.outputs.keys().cloned().collect();
-        inputs.sort_by(|a, b| {
-            let a_y = scene.inputs.get(a).unwrap().y_pos;
-            let b_y = scene.inputs.get(b).unwrap().y_pos;
-            a_y.partial_cmp(&b_y).unwrap()
-        });
-        outputs.sort_by(|a, b| {
-            let a_y = scene.outputs.get(a).unwrap().y_pos;
-            let b_y = scene.outputs.get(b).unwrap().y_pos;
-            a_y.partial_cmp(&b_y).unwrap()
-        });
+        let inputs = scene.inputs_sorted();
+        let outputs = scene.outputs_sorted();
 
-        let mut total_states = if inputs.is_empty() { 0 } else { 1 };
-        for _ in 0..inputs.len() {
-            total_states *= 2;
-        }
+        let total_states = {
+            let mut temp = if inputs.is_empty() { 0 } else { 1 };
+            for _ in 0..inputs.len() {
+                temp *= 2;
+            }
+            temp
+        };
         let mut output_states = Vec::with_capacity(total_states);
 
-        println!("total states: {}", total_states);
-
         // I do not care to support combination gates with 32+ inputs
+        // (32 inputs would have ~2 billion states)
         let mut input: u32 = 0;
         while (input >> num_inputs as u32) == 0 {
             // set inputs
@@ -63,7 +56,7 @@ impl CombGatePreset {
                 let state = scene.outputs.get(&outputs[i]).unwrap().state;
                 output.set(i, state);
             }
-            output_states.push(output);
+            output_states.push(output.data);
 
             input += 1;
         }
@@ -122,8 +115,15 @@ impl PresetData {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PresetSource {
+    Default,
+    Scene(Option<Scene>),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DevicePreset {
     pub name: String,
+    pub cat: String,
     pub color: [u8; 4],
     pub data: PresetData,
     pub src: PresetSource,
@@ -135,197 +135,141 @@ impl DevicePreset {
     }
 }
 
-#[inline(always)]
-fn key_index<K: PartialEq, V>(list: &[(K, V)], key: K) -> Option<usize> {
-    list.iter().position(|(cmp_key, _)| *cmp_key == key)
-}
-#[inline(always)]
-fn key_sort<K: PartialOrd + Ord, V>(list: &mut [(K, V)]) {
-    list.sort_by(|(a_id, _), (b_id, _)| a_id.cmp(&b_id));
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Cat {
-    pub name: String,
-    pub presets: Vec<(u64, DevicePreset)>,
-    pub next_preset_id: u64,
-}
-impl Cat {
-    pub fn new(name: String) -> Self {
-        Self {
-            name,
-            presets: Vec::new(),
-            next_preset_id: 0,
-        }
-    }
-    pub fn add_preset(&mut self, preset: DevicePreset) -> u64 {
-        if let Some(idx) = self.presets.iter().position(|(_, b)| b.name == preset.name) {
-            self.presets[idx].1 = preset;
-            self.presets[idx].0
-        } else {
-            let id = self.next_preset_id;
-            self.next_preset_id += 1;
-            self.presets.push((id, preset));
-            key_sort(&mut self.presets);
-            id
-        }
-    }
-    pub fn remove_preset(&mut self, id: u64) {
-        let idx = key_index(&self.presets, id).unwrap();
-        self.presets.remove(idx);
-        key_sort(&mut self.presets);
-    }
-
-    pub fn get_preset(&self, id: u64) -> Option<&DevicePreset> {
-        self.presets
-            .iter()
-            .find(|(cmp_id, _)| *cmp_id == id)
-            .map(|(_, preset)| preset)
-    }
-    pub fn mut_preset(&mut self, id: u64) -> Option<&mut DevicePreset> {
-        self.presets
-            .iter_mut()
-            .find(|(cmp_id, _)| *cmp_id == id)
-            .map(|(_, preset)| preset)
-    }
-}
-
-const DEFAULT_CAT: &'static str = "Basic";
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Presets {
-    pub cats: Vec<(u64, Cat)>,
-    pub next_cat_id: u64,
+    presets: Vec<DevicePreset>,
+    dirty: Vec<String>,
+    removed: Vec<String>,
 }
 impl Presets {
     pub fn default() -> Self {
-        let mut cat = Cat {
-            name: String::from(DEFAULT_CAT),
-            presets: Vec::new(),
-            next_preset_id: 0,
-        };
-        for preset in [and_gate_preset(), not_gate_preset()] {
-            let id = cat.next_preset_id;
-            cat.next_preset_id += 1;
-            cat.presets.push((id, preset));
-        }
+        let mut presets = Self::new(vec![]);
+        presets.add_preset(and_gate_preset());
+        presets.add_preset(not_gate_preset());
+        presets
+    }
+    pub fn new(presets: Vec<DevicePreset>) -> Self {
         Self {
-            cats: vec![(0, cat)],
-            next_cat_id: 1,
+            presets,
+            dirty: Vec::new(),
+            removed: Vec::new(),
         }
     }
-    pub fn merge(&mut self, other: &Self) {
-        for cat in &other.cats {
-            let Some(cat_idx) = self.cats.iter().position(|(_, n)| n.name == cat.1.name) else {
-            	// cat doesn't already exist, just add it
-            	self.cats.push((self.next_cat_id, cat.1.clone()));
-            	self.next_cat_id += 1;
-            	continue;
-            };
-            // cat exists, so we must merge them
 
-            for preset in &cat.1.presets {
-                let idx = self.cats[cat_idx]
-                    .1
-                    .presets
-                    .iter()
-                    .position(|(_, n)| n.name == preset.1.name);
-                if let Some(idx) = idx {
-                    // preset already exists, override it
-                    self.cats[cat_idx].1.presets[idx].1 = preset.1.clone();
-                } else {
-                    // preset is new, so add it
-                    self.cats[cat_idx].1.add_preset(preset.1.clone());
-                }
+    #[inline(always)]
+    pub fn consume_dirty(&mut self) -> Vec<String> {
+        let mut new = Vec::new();
+        std::mem::swap(&mut self.dirty, &mut new);
+        new
+    }
+    #[inline(always)]
+    pub fn consume_removed(&mut self) -> Vec<String> {
+        let mut new = Vec::new();
+        std::mem::swap(&mut self.removed, &mut new);
+        new
+    }
+    #[inline(always)]
+    pub fn get(&self) -> &[DevicePreset] {
+        &self.presets
+    }
+
+    pub fn merge(&mut self, presets: &[DevicePreset]) {
+        for preset in presets {
+            if let Some(idx) = self.get_preset_idx(&preset.name) {
+                self.presets[idx] = preset.clone();
+            } else {
+                self.presets.push(preset.clone());
+            }
+            self.dirty.push(preset.name.clone());
+        }
+    }
+
+    pub fn add_preset(&mut self, preset: DevicePreset) {
+        self.dirty.push(preset.name.clone());
+        if let Some(idx) = self.get_preset_idx(&preset.name) {
+            self.presets[idx] = preset;
+        } else {
+            self.presets.push(preset);
+        }
+    }
+    pub fn remove_preset(&mut self, name: &str) {
+        let idx = self.get_preset_idx(name).unwrap();
+        if matches!(self.presets[idx].src, PresetSource::Default) {
+            println!("Can't remove default preset");
+            return;
+        }
+        self.presets.remove(idx);
+        self.removed.push(String::from(name));
+    }
+
+    #[inline(always)]
+    pub fn get_preset_idx(&self, name: &str) -> Option<usize> {
+        self.presets
+            .iter()
+            .position(|preset| preset.name.as_str() == name)
+    }
+    #[inline(always)]
+    pub fn get_preset(&self, name: &str) -> Option<&DevicePreset> {
+        self.presets
+            .iter()
+            .find(|preset| preset.name.as_str() == name)
+    }
+    #[inline(always)]
+    pub fn mut_preset(&mut self, name: &str) -> Option<&mut DevicePreset> {
+        self.presets
+            .iter_mut()
+            .find(|preset| preset.name.as_str() == name)
+    }
+
+    pub fn cats_sorted(&self) -> Vec<(&str, Vec<&DevicePreset>)> {
+        let mut cats: Vec<(&str, Vec<&DevicePreset>)> = Vec::new();
+        for preset in &self.presets {
+            if let Some(cat) = cats
+                .iter_mut()
+                .find(|(name, _)| *name == preset.cat.as_str())
+            {
+                cat.1.push(preset);
+            } else {
+                cats.push((preset.cat.as_str(), vec![preset]));
             }
         }
+        cats
     }
-
-    pub fn add_cat(&mut self, name: String) -> Option<u64> {
-        if name.trim().is_empty() {
-            return None;
+    pub fn cat_presets(&self, cat: &str) -> Vec<&DevicePreset> {
+        let mut presets = Vec::new();
+        for preset in &self.presets {
+            if preset.cat.as_str() == cat {
+                presets.push(preset);
+            }
         }
-        if self
-            .cats
-            .iter()
-            .find(|(_, b)| b.name.as_str() == name)
-            .is_some()
-        {
-            eprintln!("can't re-use category names");
-            return None;
-        }
-
-        let id = self.next_cat_id;
-        self.next_cat_id += 1;
-        self.cats.push((id, Cat::new(name)));
-        key_sort(&mut self.cats);
-        Some(id)
+        presets
     }
-    pub fn remove_cat(&mut self, id: u64) -> bool {
-        if self.cats.len() == 1 {
-            eprintln!("can't remove last category");
-            return false;
-        }
-
-        let idx = key_index(&self.cats, id).unwrap();
-
-        if self.cats[idx].1.name.as_str() == DEFAULT_CAT {
-            eprintln!("can't remove default category");
-            return false;
-        }
-        if self.cats[idx].1.presets.len() != 0 {
-            eprintln!("can't remove a category with presets in it");
-            return false;
-        }
-
-        self.cats.remove(idx);
-        key_sort(&mut self.cats);
-        true
-    }
-
-    pub fn get_cat(&self, id: u64) -> Option<&Cat> {
-        self.cats
-            .iter()
-            .find(|(cmp_id, _)| *cmp_id == id)
-            .map(|(_, cat)| cat)
-    }
-    pub fn mut_cat(&mut self, id: u64) -> Option<&mut Cat> {
-        self.cats
-            .iter_mut()
-            .find(|(cmp_id, _)| *cmp_id == id)
-            .map(|(_, cat)| cat)
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum PresetSource {
-    BuiltIn,
-    Scene(Option<crate::scene::SceneLayout>),
-    // Code(), // design chips with some coding language?
 }
 
 pub fn and_gate_preset() -> DevicePreset {
     DevicePreset {
         name: String::from("And"),
+        cat: String::from("Basic"),
         color: [255, 0, 0, 255],
         data: PresetData::CombGate(CombGatePreset {
             inputs: [""; 2].map(str::to_owned).to_vec(),
             outputs: [""; 1].map(str::to_owned).to_vec(),
             table: and_truth_table(),
         }),
-        src: PresetSource::BuiltIn,
+        src: PresetSource::Default,
     }
 }
 pub fn not_gate_preset() -> DevicePreset {
     DevicePreset {
         name: String::from("Not"),
+        cat: String::from("Basic"),
         color: [0, 255, 0, 255],
         data: PresetData::CombGate(CombGatePreset {
             inputs: [""; 1].map(str::to_owned).to_vec(),
             outputs: [""; 1].map(str::to_owned).to_vec(),
             table: not_truth_table(),
         }),
-        src: PresetSource::BuiltIn,
+        src: PresetSource::Default,
     }
 }
 
@@ -334,10 +278,10 @@ pub fn and_truth_table() -> TruthTable {
         num_inputs: 2,
         num_outputs: 1,
         map: vec![
-            BitField::single(0), // 00
-            BitField::single(0), // 01
-            BitField::single(0), // 10
-            BitField::single(1), // 11
+            0, // 00
+            0, // 01
+            0, // 10
+            1, // 11
         ],
     }
 }
@@ -346,8 +290,8 @@ pub fn not_truth_table() -> TruthTable {
         num_inputs: 1,
         num_outputs: 1,
         map: vec![
-            BitField::single(1), // 0
-            BitField::single(0), // 1
+            1, // 0
+            0, // 1
         ],
     }
 }

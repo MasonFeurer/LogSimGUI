@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod graphics;
+pub mod input;
 pub mod preset;
 pub mod scene;
 pub mod settings;
@@ -30,8 +31,8 @@ impl<T: Copy> DeviceInput<T> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BitField {
-    len: usize,
     pub data: u64,
+    len: usize,
 }
 impl BitField {
     #[inline(always)]
@@ -74,6 +75,7 @@ impl BitField {
         assert!(pos < self.len);
         ((self.data >> pos as u64) & 1) == 1
     }
+    #[inline(always)]
     pub fn any_on(&self) -> bool {
         self.data.count_ones() > 0
     }
@@ -91,12 +93,15 @@ impl BitField {
 pub struct TruthTable {
     pub num_inputs: usize,
     pub num_outputs: usize,
-    pub map: Vec<BitField>,
+    pub map: Vec<u64>,
 }
 impl TruthTable {
     #[inline(always)]
     pub fn get(&self, input: usize) -> BitField {
-        self.map[input]
+        BitField {
+            len: self.num_outputs,
+            data: self.map[input],
+        }
     }
 }
 impl std::fmt::Debug for TruthTable {
@@ -106,7 +111,7 @@ impl std::fmt::Debug for TruthTable {
         for output in &self.map {
             f.field(
                 &format!("{:01$b}", input, self.num_inputs),
-                &format!("{:01$b}", output.data, self.num_outputs),
+                &format!("{:01$b}", *output, self.num_outputs),
             );
             input += 1;
         }
@@ -119,17 +124,16 @@ pub enum LinkTarget<T> {
     DeviceInput(T, usize),
     Output(T),
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LinkStart<T> {
     DeviceOutput(T, usize),
     Input(T),
 }
 
 fn main() {
-    let native_options = eframe::NativeOptions::default();
-
+    let mut native_options = eframe::NativeOptions::default();
     eframe::run_native(
-        "Logic Gate Sim",
+        "LogSimGUI",
         native_options,
         Box::new(|_cc| Box::new(app::App::new())),
     );

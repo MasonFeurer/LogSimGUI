@@ -1,121 +1,10 @@
-use crate::preset::Presets;
+use crate::preset::{DevicePreset, Presets};
+use crate::scene::Scene;
 use eframe::egui::*;
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
-use std::path::PathBuf;
-use std::process::Command;
-
-fn fmt_err<E: Debug>(err: E) -> String {
-    format!("{err:?}")
-}
-
-pub fn config_dir() -> Option<PathBuf> {
-    let mut config_dir = dirs::config_dir()?;
-    config_dir.push("logic-sim-gui");
-    Some(config_dir)
-}
-pub fn save_config(name: &str, bytes: &[u8]) -> Result<(), String> {
-    let mut path = config_dir().unwrap();
-    let _ = std::fs::create_dir(&path);
-    path.push(name);
-    std::fs::write(&path, bytes).map_err(|err| format!("error saving path {:?} : {:?}", path, err))
-}
-pub fn load_config(name: &str) -> Result<Vec<u8>, String> {
-    let mut path = config_dir().unwrap();
-    let _ = std::fs::create_dir(&path);
-    path.push(name);
-    std::fs::read(&path).map_err(|err| format!("error loading path {:?} : {:?}", path, err))
-}
-
-pub fn reveal_dir(dir: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(target_os = "windows")]
-    let cmd = "explorer";
-    #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
-    let output = Command::new(cmd).arg(dir).output().unwrap();
-    if output.stderr.is_empty() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).into_owned())
-    }
-}
-
-pub fn encode_settings(settings: &Settings) -> Vec<u8> {
-    serde_json::to_string(settings).unwrap().as_bytes().to_vec()
-}
-pub fn decode_settings(bytes: &[u8]) -> Result<Settings, String> {
-    let json = String::from_utf8_lossy(bytes).to_owned();
-    serde_json::from_str(&json).map_err(fmt_err)
-}
-
-pub fn encode_presets(presets: &Presets) -> Vec<u8> {
-    bincode::serialize(presets, bincode::Infinite).unwrap()
-}
-pub fn decode_presets(bytes: &[u8]) -> Result<Presets, String> {
-    let presets: Result<Presets, _> = bincode::deserialize(&bytes);
-    match presets {
-        Ok(presets) => {
-            // loaded presets must contain a cat of ID 0
-            for (cat_id, _) in &presets.cats {
-                if *cat_id == 0 {
-                    return Ok(presets);
-                }
-            }
-            // at this point, we have determined that there isn't a cat of ID 0
-            println!("error loading presets: corrupted presets");
-            return Err("corrupted presets".to_owned());
-        }
-        Err(err) => Err(fmt_err(&err)),
-    }
-}
-
-pub fn save_settings(settings: &Settings) {
-    let bytes = encode_settings(settings);
-    if let Err(err) = save_config("settings.json", &bytes) {
-        eprintln!("error saving settings: {err}");
-    }
-}
-pub fn load_settings() -> Option<Settings> {
-    let bytes = match load_config("settings.json") {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            eprintln!("error loading settings: {err}");
-            return None;
-        }
-    };
-    match decode_settings(&bytes) {
-        Ok(settings) => Some(settings),
-        Err(err) => {
-            eprintln!("error loading settings: {err}");
-            None
-        }
-    }
-}
-
-pub fn save_presets(presets: &Presets) {
-    let bytes = encode_presets(presets);
-    if let Err(err) = save_config("presets", &bytes) {
-        eprintln!("error saving presets: {err}");
-    }
-}
-pub fn load_presets() -> Option<Presets> {
-    let bytes = match load_config("presets") {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            eprintln!("error loading presets: {err}");
-            return None;
-        }
-    };
-    match decode_presets(&bytes) {
-        Ok(presets) => Some(presets),
-        Err(err) => {
-            eprintln!("error loading presets: {err}");
-            None
-        }
-    }
-}
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::{fmt, fs, io, process};
 
 #[derive(Serialize, Deserialize)]
 pub struct Settings {
@@ -132,11 +21,6 @@ pub struct Settings {
     pub device_name_font_size: f32,
     pub device_pin_size: [f32; 2],
     pub device_min_pin_spacing: f32,
-
-    pub show_device_id: bool,
-    pub show_write_queue: bool,
-
-    pub preset_picker_pos: [f32; 2],
 }
 impl Settings {
     pub fn default() -> Self {
@@ -154,10 +38,6 @@ impl Settings {
             device_name_font_size: 16.0,
             device_pin_size: [15.0, 10.0],
             device_min_pin_spacing: 14.0,
-
-            show_device_id: false,
-            show_write_queue: false,
-            preset_picker_pos: [50.0, 50.0],
         }
     }
 
@@ -204,5 +84,222 @@ impl Settings {
     }
     pub fn device_pins_height(&self, count: usize) -> f32 {
         (count as f32 + 1.0) * self.device_min_pin_spacing
+    }
+}
+
+#[derive(Clone)]
+pub struct Err {
+    not_found: bool,
+    path: String,
+    msg: String,
+}
+impl Err {
+    #[inline(always)]
+    fn io_err<P: AsRef<Path>>(path: P, err: io::Error) -> Self {
+        Self {
+            not_found: false,
+            path: format!("{}", path.as_ref().display()),
+            msg: format!("{:?}", err.kind()),
+        }
+    }
+    #[inline(always)]
+    fn new<P: AsRef<Path>, M: fmt::Debug>(path: P, msg: M) -> Self {
+        Self {
+            not_found: false,
+            path: format!("{}", path.as_ref().display()),
+            msg: format!("\"{msg:?}\""),
+        }
+    }
+    #[inline(always)]
+    fn not_found(mut self) -> Self {
+        self.not_found = true;
+        self
+    }
+
+    #[inline(always)]
+    fn context(mut self, ctx: &str) -> Self {
+        self.msg = format!("{} : {}", ctx, self.msg);
+        self
+    }
+
+    #[inline(always)]
+    pub fn log(self) {
+        println!("{} ({:?})", self.msg, self.path);
+    }
+    pub fn panic(self) -> ! {
+        panic!("{} ({:?})", self.msg, self.path);
+    }
+}
+
+pub trait ErrResult<T> {
+    fn log_err(self);
+    fn unwrap_res_or<F: Fn() -> T>(self, f: F) -> T;
+}
+impl<T> ErrResult<T> for Result<T, Err> {
+    fn log_err(self) {
+        if let Err(err) = self {
+            err.log();
+        }
+    }
+    fn unwrap_res_or<F: Fn() -> T>(self, f: F) -> T {
+        match self {
+            Ok(v) => return v,
+            Err(err) if !err.not_found => err.log(),
+            Err(_) => {}
+        }
+        f()
+    }
+}
+
+pub fn config_dir() -> PathBuf {
+    let mut buf = dirs::config_dir().unwrap_or(PathBuf::new());
+    buf.push("LogSimGUI");
+    buf
+}
+
+pub fn open_file<T: AsRef<Path>>(path: &T) -> Result<fs::File, Err> {
+    match fs::File::open(path) {
+        Ok(file) => Ok(file),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            Err(Err::io_err(path, err).not_found())
+        }
+        Err(err) => Err(Err::io_err(path, err)),
+    }
+}
+pub fn write_file<P: AsRef<Path>>(path: &P) -> Result<fs::File, Err> {
+    match fs::File::create(path) {
+        Ok(file) => Ok(file),
+        Err(err) => Err(Err::io_err(path, err)),
+    }
+}
+
+pub fn save_str(name: &str, s: &str) -> Result<(), Err> {
+    let path = config_path(name);
+    let mut file = write_file(&path)?;
+    file.write_all(s.as_bytes())
+        .map_err(|err| Err::io_err(path, err))
+}
+pub fn save_ron<P: AsRef<Path>, T: Serialize>(path: &P, value: &T) -> Result<(), Err> {
+    let mut file = write_file(path)?;
+    let string = ron::ser::to_string_pretty(value, ron::ser::PrettyConfig::new())
+        .map_err(|err| Err::new(path, err))?;
+    file.write_all(string.as_bytes())
+        .map_err(|err| Err::new(path, err))
+}
+pub fn save_data<P: AsRef<Path>, T: Serialize>(path: &P, value: &T) -> Result<(), Err> {
+    let mut file = write_file(path)?;
+    let bytes = bincode::serialize(value).map_err(|err| Err::new(path, err))?;
+    file.write_all(&bytes).map_err(|err| Err::new(path, err))
+}
+
+pub fn load_ron<P, T>(path: &P) -> Result<T, Err>
+where
+    P: AsRef<Path>,
+    T: for<'de> serde::de::Deserialize<'de>,
+{
+    let mut file = open_file(path)?;
+    match ron::de::from_reader::<_, T>(&mut file) {
+        Ok(v) => Ok(v),
+        Err(_) => Err(Err::new(path, "Invalid RON")),
+    }
+}
+pub fn load_data<P, T>(path: &P) -> Result<T, Err>
+where
+    P: AsRef<Path>,
+    T: for<'de> serde::de::Deserialize<'de>,
+{
+    let mut file = open_file(path)?;
+    match bincode::deserialize_from::<_, T>(&mut file) {
+        Ok(v) => Ok(v),
+        Err(_) => Err(Err::new(path, "Invalid data")),
+    }
+}
+
+pub fn config_path(name: &str) -> String {
+    let mut buf = config_dir();
+    let config_path = buf.to_str().unwrap();
+    match std::fs::create_dir(&buf) {
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(err) => eprintln!("Failed to create config directory {config_path:?} : {err:?}"),
+    }
+    buf.push(name);
+    String::from(buf.to_str().unwrap())
+}
+
+pub fn save_presets(presets: &mut Presets) -> Result<(), Err> {
+    let mut path_buf = config_dir();
+    path_buf.push("presets");
+    let _ = std::fs::create_dir(&path_buf);
+
+    let removed = presets.consume_removed();
+    let dirty = presets.consume_dirty();
+    for name in removed {
+        path_buf.push(format!("{}.data", name));
+        let _ = std::fs::remove_file(&path_buf);
+        path_buf.pop();
+    }
+    for name in dirty {
+        path_buf.push(format!("{}.data", name));
+        let preset = presets.get_preset(&name).unwrap();
+        save_data(&path_buf, preset)?;
+        path_buf.pop();
+    }
+    let index: Vec<_> = presets
+        .get()
+        .iter()
+        .map(|preset| format!("{}.data", preset.name))
+        .collect();
+    path_buf.push("__index.ron");
+    save_ron(&path_buf, &index)
+}
+pub fn load_presets_at(path: &mut PathBuf) -> Result<Vec<DevicePreset>, Err> {
+    let mut presets = Vec::new();
+    let path_str = String::from(path.to_str().unwrap());
+
+    let add_ctx = |e: Err| e.context(&format!("Failed to load presets at {path_str:?}"));
+
+    path.push("__index.ron");
+    let index: Vec<String> = load_ron(path).map_err(add_ctx)?;
+    path.pop();
+    for entry in index {
+        path.push(entry);
+        let preset: DevicePreset = load_data(path).map_err(add_ctx)?;
+        presets.push(preset);
+        path.pop();
+    }
+    Ok(presets)
+}
+pub fn load_presets() -> Result<Presets, Err> {
+    let mut path_buf = config_dir();
+    path_buf.push("presets");
+    let presets = load_presets_at(&mut path_buf)?;
+    Ok(Presets::new(presets))
+}
+pub fn save_settings(settings: &Settings) -> Result<(), Err> {
+    save_ron(&config_path("settings.ron"), settings)
+}
+pub fn load_settings() -> Result<Settings, Err> {
+    load_ron(&config_path("settings.ron"))
+}
+pub fn save_scene(scene: &Scene) -> Result<(), Err> {
+    save_data(&config_path("scene.data"), scene)
+}
+pub fn load_scene() -> Result<Scene, Err> {
+    load_data(&config_path("scene.data"))
+}
+
+pub fn reveal_dir(dir: &str) -> Result<(), String> {
+    #[allow(unused_variables)]
+    let cmd = "open";
+    #[cfg(target_os = "windows")]
+    let cmd = "explorer";
+    #[cfg(target_os = "linux")]
+    let cmd = "xdg-open";
+    let output = process::Command::new(cmd).arg(dir).output().unwrap();
+    if output.stderr.is_empty() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).into_owned())
     }
 }

@@ -17,11 +17,11 @@ pub fn scene_output_view_y(scene: &Scene, id: u64, v: &View) -> Option<f32> {
 }
 #[inline(always)]
 pub fn unmap_io_y(v: &View, y: f32) -> f32 {
-    y - v.offset.y * v.scale()
+    (y - v.offset.y) / v.scale()
 }
 #[inline(always)]
 pub fn map_io_y(v: &View, y: f32) -> f32 {
-    y + v.offset.y * v.scale()
+    y * v.scale() + v.offset.y
 }
 
 pub fn spread_y<T, F: Fn(f32) -> T>(min: f32, max: f32, count: usize, f: F) -> Vec<T> {
@@ -81,7 +81,8 @@ pub fn link_target_pos(
     match target {
         LinkTarget::Output(id) => {
             let y = scene_output_view_y(scene, id, v)?;
-            let x = scene.rect.max.x - s.scene_pin_col_w - s.scene_pin_size[0];
+            let x =
+                scene.rect.max.x - s.scene_pin_col_w * v.scale() - s.scene_pin_size[0] * v.scale();
             Some(Pos2 { x, y })
         }
         LinkTarget::DeviceInput(device_id, input) => {
@@ -100,7 +101,8 @@ pub fn link_start_pos(
     match start {
         LinkStart::Input(id) => {
             let y = scene_input_view_y(scene, id, v)?;
-            let x = scene.rect.min.x + s.scene_pin_col_w + s.scene_pin_size[0];
+            let x =
+                scene.rect.min.x + s.scene_pin_col_w * v.scale() + s.scene_pin_size[0] * v.scale();
             Some(Pos2 { x, y })
         }
         LinkStart::DeviceOutput(device_id, output) => {
@@ -125,6 +127,23 @@ impl View {
             offset: Vec2::ZERO,
             zoom: 100.0,
         }
+    }
+    pub fn zoom(&mut self, delta: f32, pos: Pos2) {
+        let xs = (pos.x - self.offset.x) / self.scale();
+        let ys = (pos.y - self.offset.y) / self.scale();
+        self.zoom *= delta;
+
+        const MIN_ZOOM: f32 = 10.0;
+        const MAX_ZOOM: f32 = 200.0;
+
+        self.zoom = f32::max(self.zoom, MIN_ZOOM);
+        self.zoom = f32::min(self.zoom, MAX_ZOOM);
+
+        self.offset.x = pos.x - xs * self.scale();
+        self.offset.y = pos.y - ys * self.scale();
+    }
+    pub fn drag(&mut self, drag: Vec2) {
+        self.offset += drag;
     }
 
     #[inline(always)]
@@ -163,34 +182,6 @@ impl View {
     #[inline(always)]
     pub fn inv_scale(&self) -> f32 {
         100.0 / self.zoom
-    }
-}
-
-pub fn response_has_priority(new: &Response, old: &Response) -> bool {
-    match (
-        old.drag_delta() != Vec2::ZERO,
-        new.drag_delta() != Vec2::ZERO,
-    ) {
-        (true, _) => return true,
-        (false, true) => return false,
-        (false, false) => (),
-    };
-    old.clicked() || old.secondary_clicked()
-}
-pub fn response_has_interaction(rs: &Response) -> bool {
-    rs.clicked() || rs.secondary_clicked() || rs.hovered() || rs.drag_delta() != Vec2::ZERO
-}
-
-pub fn handle_sub_response<T>(rs: &mut Option<(Response, T)>, sub_rs: Response, item: T) {
-    if !response_has_interaction(&sub_rs) {
-        return;
-    }
-    let replace = match rs {
-        Some(rs) => response_has_priority(&sub_rs, &rs.0),
-        None => true,
-    };
-    if replace {
-        *rs = Some((sub_rs.clone(), item))
     }
 }
 
@@ -368,13 +359,12 @@ pub fn show_pin(g: &mut Graphics, s: &Settings, rect: Rect, state: bool, name: &
 }
 pub fn show_group_header(
     g: &mut Graphics,
-    s: &Settings,
+    col_w: f32,
     group: &Group,
     states: &[bool],
     center: f32,
     top: f32,
 ) -> bool {
-    let col_w = s.scene_pin_col_w;
     let text = Scene::group_value(group, states);
     let size = GROUP_HEADER_SIZE;
     let rect = Rect::from_min_size(Pos2::new(center - col_w * 0.5, top), Vec2::new(col_w, size));
@@ -447,6 +437,7 @@ pub fn show_device(
     view: &View,
     id: u64,
     device: &scene::Device,
+    debug_id: bool,
 ) -> Option<DeviceItem> {
     let pos = device_pos(device, view);
     let size = device_size(device, s, view);
@@ -498,12 +489,12 @@ pub fn show_device(
         }
     }
 
-    if s.show_device_id {
+    if debug_id {
         g.text(
             pos + Vec2::new(size.x * 0.5, -10.0),
             10.0,
             &format!("{}", id),
-            Color32::WHITE,
+            Color32::from_gray(120),
             Align2::CENTER_CENTER,
         );
     }
@@ -531,6 +522,7 @@ pub fn show_scene(
     view: &View,
     scene: &scene::Scene,
     dead_links: &mut Vec<(LinkStart<u64>, usize)>,
+    debug_device_ids: bool,
 ) -> Option<SceneItem> {
     let mut result: Option<SceneItem> = None;
 
@@ -560,7 +552,7 @@ pub fn show_scene(
 
     // DEVICES
     for (device_id, device) in &scene.devices {
-        let device_rs = show_device(g, s, view, *device_id, device);
+        let device_rs = show_device(g, s, view, *device_id, device, debug_device_ids);
 
         if let Some(device_item) = device_rs {
             let scene_item = match device_item {
@@ -572,16 +564,35 @@ pub fn show_scene(
         }
     }
 
+    // DEVICE LINKS (NONINTERACTIVE)
+    for (_, device) in &scene.devices {
+        let device_rect =
+            Rect::from_min_size(device_pos(device, view), device_size(device, s, view));
+
+        let links = device_output_links(s, view, device_rect, device.num_outputs());
+        for output_idx in 0..device.links.len() {
+            for (_, target) in device.links[output_idx].iter().enumerate() {
+                let state = device.data.output().get(output_idx);
+                let link_start = links[output_idx];
+
+                let Some(target_pos) = link_target_pos(s, view, scene, *target) else {
+                	continue;
+                };
+                show_link(g, s, state, link_start, target_pos);
+            }
+        }
+    }
+
     // SCENE IO COLUMN BARS
-    let col_w = s.scene_pin_col_w;
+    let col_w = s.scene_pin_col_w * view.scale();
     let output_col_x = g.rect.max.x - col_w;
     let input_col_x = g.rect.min.x + col_w;
 
     let (y0, y1) = (g.rect.min.y, g.rect.max.y);
 
     let stroke = ShowStroke {
-        color: [Color32::from_gray(100), Color32::WHITE],
-        width: [2.0, 2.0],
+        color: [Color32::from_gray(100); 2],
+        width: [2.0; 2],
     };
     let _ = g.line(
         Pos2::new(input_col_x, y0),
@@ -597,7 +608,7 @@ pub fn show_scene(
     );
 
     // SCENE INPUTS
-    let pin_size = Vec2::from(s.scene_pin_size);
+    let pin_size = Vec2::from(s.scene_pin_size) * view.scale();
     for (input_id, input) in &scene.inputs {
         let y = scene_input_view_y(scene, *input_id, view).unwrap();
 
@@ -636,7 +647,9 @@ pub fn show_scene(
 
         // SCENE INPUT LINKS
         let link_start = Pos2 {
-            x: scene.rect.min.x + s.scene_pin_col_w + s.scene_pin_size[0],
+            x: scene.rect.min.x
+                + s.scene_pin_col_w * view.scale()
+                + s.scene_pin_size[0] * view.scale(),
             y,
         };
         for (link_idx, target) in input.links.iter().enumerate() {
@@ -658,7 +671,7 @@ pub fn show_scene(
             states.push(scene.inputs.get(member_id).unwrap().state);
         }
         let header_top = map_io_y(&view, group.input_bottom_y(scene)) + col_w * 0.5;
-        if show_group_header(g, s, group, &states, center, header_top) {
+        if show_group_header(g, col_w, group, &states, center, header_top) {
             result = Some(SceneItem::InputGroup(*group_id));
         }
     }
@@ -709,7 +722,7 @@ pub fn show_scene(
             states.push(scene.outputs.get(member_id).unwrap().state);
         }
         let header_top = map_io_y(view, group.output_bottom_y(scene)) + col_w * 0.5;
-        if show_group_header(g, s, group, &states, center, header_top) {
+        if show_group_header(g, col_w, group, &states, center, header_top) {
             result = Some(SceneItem::OutputGroup(*group_id));
         }
     }
