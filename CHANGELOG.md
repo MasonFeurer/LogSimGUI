@@ -26,7 +26,7 @@
 - Fixed device links interfering with device pins
 - Hid the debug settings and debug menu behind a hidden setting
 
-## Release Current
+## Release 221125
 - Fixed scene dragging when menu is open
 - Can now start creating multiple links at once
 - Can now delete all links on device output by pressing Backspace on the pin

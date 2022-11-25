@@ -131,7 +131,7 @@ pub enum LinkStart<T> {
 }
 
 fn main() {
-    let mut native_options = eframe::NativeOptions::default();
+    let native_options = eframe::NativeOptions::default();
     eframe::run_native(
         "LogSimGUI",
         native_options,
