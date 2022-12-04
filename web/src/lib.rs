@@ -1,4 +1,4 @@
-use eframe::egui::{Context, Event, Key, Pos2};
+use eframe::egui::{Context, Key, Pos2};
 use eframe::wasm_bindgen::{self, prelude::*};
 use log_sim_gui::integration::FrameInput;
 use log_sim_gui::*;
@@ -70,12 +70,6 @@ impl eframe::App for WebApp {
         // merge presets if needed
         if let Ok(preset) = merge_presets().1.try_recv() {
             self.app.presets.merge(&[preset]);
-        }
-
-        for event in &ctx.input().events {
-            let Event::Key { key, pressed: true, .. } = event else {
-        		continue;
-        	};
         }
 
         // rest of update
