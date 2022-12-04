@@ -3,12 +3,27 @@ pub mod chip;
 use crate::preset::{DevicePreset, PresetData};
 use crate::settings::Settings;
 use crate::*;
-use eframe::egui::Color32;
+use egui::Color32;
 use hashbrown::HashMap;
+use tinyrand::RandRange;
 
 pub use chip::Chip;
 
-// :WRITE
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SceneItem {
+    Device(u64),
+    DeviceInput(u64, usize),
+    DeviceOutput(u64, usize),
+    DeviceOutputLink(u64, usize, usize),
+    InputPin(u64),
+    InputBulb(u64),
+    InputLink(u64, usize),
+    InputGroup(u64),
+    OutputPin(u64),
+    OutputBulb(u64),
+    OutputGroup(u64),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Write<T> {
     pub target: LinkTarget<T>,
@@ -25,24 +40,21 @@ impl<T: Clone + PartialEq> WriteQueue<T> {
     }
 
     pub fn push(&mut self, target: LinkTarget<T>, state: bool) {
-        // if there is already a queued write to the same target, this write must eventually execute after it,
+        // If there is already a queued write to the same target, this write must eventually execute after it,
         // by making sure it's delay is greater than the already queued event.
-        // let mut min_delay = 0;
+        let mut rand = crate::RAND.lock().unwrap();
         for write in &mut self.0 {
             if write.target == target {
-                write.delay += fastrand::u8(0..3);
+                write.delay += rand.next_range(0u64..3) as u8;
                 write.state = state;
                 return;
             }
-            // min_delay = std::cmp::max(min_delay, write.delay);
         }
-        // let delay = min_delay + fastrand::u8(1..6);
         self.0.push(Write {
             target,
             state,
-            // delay,
-            delay: fastrand::u8(0..3),
-        })
+            delay: rand.next_range(0u64..3) as u8,
+        });
     }
 
     pub fn update(&mut self, ready: &mut Vec<Write<T>>) {
@@ -68,7 +80,6 @@ pub struct SetOutput {
     pub state: bool,
 }
 
-// :COMBGATE
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CombGate {
     pub input: BitField,
@@ -108,7 +119,6 @@ impl CombGate {
     }
 }
 
-// :DDATA
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DeviceData {
     CombGate(CombGate),
@@ -145,7 +155,6 @@ impl DeviceData {
     }
 }
 
-// :DEVICE
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     pub pos: Pos2,
@@ -181,7 +190,6 @@ impl Device {
     }
 }
 
-// :IO
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Input {
     pub name: String,
@@ -220,7 +228,6 @@ impl Output {
     }
 }
 
-// :SCENE DECL
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scene {
     pub rect: Rect,
@@ -340,7 +347,6 @@ impl Scene {
         keys
     }
 }
-// :SCENE DEVICES
 impl Scene {
     pub fn add_device(&mut self, id: u64, device: Device) {
         self.devices.insert(id, device);
@@ -385,7 +391,6 @@ impl Scene {
         Some(self.devices.get(&device)?.data.output().get(output))
     }
 }
-// :SCENE INPUTS
 impl Scene {
     pub fn add_input(&mut self, y: f32) {
         self.inputs.insert(rand_id(), Input::new(y));
@@ -485,13 +490,14 @@ impl Scene {
         let member = group.members.pop().unwrap();
 
         if group.members.len() == 1 {
+            let last_member = group.members[0];
             self.input_groups.remove(&group_id);
             self.inputs.get_mut(&id).unwrap().group_member = None;
+            self.inputs.get_mut(&last_member).unwrap().group_member = None;
         }
         self.inputs.remove(&member);
     }
 }
-// :SCENE OUTPUTS
 impl Scene {
     pub fn add_output(&mut self, y: f32) {
         self.outputs.insert(rand_id(), Output::new(y));
@@ -581,13 +587,14 @@ impl Scene {
         let member = group.members.pop().unwrap();
 
         if group.members.len() == 1 {
+            let last_member = group.members[0];
             self.output_groups.remove(&group_id);
             self.outputs.get_mut(&id).unwrap().group_member = None;
+            self.outputs.get_mut(&last_member).unwrap().group_member = None;
         }
         self.outputs.remove(&member);
     }
 }
-// :SCENE LINKS
 impl Scene {
     pub fn add_link(&mut self, link: NewLink<u64>) {
         match link {
@@ -608,23 +615,23 @@ impl Scene {
     }
 
     #[inline(always)]
-    pub fn get_link_target(&self, target: &LinkTarget<u64>) -> Option<bool> {
+    pub fn get_link_target(&self, target: LinkTarget<u64>) -> Option<bool> {
         match target {
             LinkTarget::DeviceInput(device, input) => {
-                let device = self.devices.get(device)?;
-                Some(device.data.input().get(*input))
+                let device = self.devices.get(&device)?;
+                Some(device.data.input().get(input))
             }
-            LinkTarget::Output(output) => Some(self.outputs.get(output)?.state),
+            LinkTarget::Output(output) => Some(self.outputs.get(&output)?.state),
         }
     }
     #[inline(always)]
-    pub fn get_link_start(&self, start: &LinkStart<u64>) -> Option<bool> {
+    pub fn get_link_start(&self, start: LinkStart<u64>) -> Option<bool> {
         match start {
             LinkStart::DeviceOutput(device, output) => {
-                let device = self.devices.get(device)?;
-                Some(device.data.output().get(*output))
+                let device = self.devices.get(&device)?;
+                Some(device.data.output().get(output))
             }
-            LinkStart::Input(input) => Some(self.inputs.get(input)?.state),
+            LinkStart::Input(input) => Some(self.inputs.get(&input)?.state),
         }
     }
 

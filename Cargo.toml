@@ -1,18 +1,17 @@
 [package]
-name = "logic-sim-gui"
+name = "log-sim-gui"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+
 [dependencies]
 serde = { version = "^1", features = ["serde_derive"] }
-ron = "0.8"
-bincode = "1.3.3"
 
-fastrand = "1.8.0"
+lazy_static = "1.4.0"
+getrandom = "^0.2.8"
+tinyrand = "0.5"
 hashbrown = { version = "0.13.1", features = ["serde"] }
 
-dirs = "4.0"
-rfd = "0.10"
-
-eframe = { git = "https://github.com/emilk/egui.git" }
+egui = { git = "https://github.com/emilk/egui.git" }
 epaint = { git = "https://github.com/emilk/egui.git", features = ["serde"] }

@@ -1,11 +1,11 @@
-use crate::graphics::{Graphics, SceneItem, View};
-use crate::input::{FrameInput, CMD_KEY};
-use crate::preset::{ChipPreset, CombGatePreset, DevicePreset, PresetData, PresetSource, Presets};
-use crate::scene::{Device, Scene};
-use crate::settings::{ErrResult, Settings};
+use crate::graphics::{Graphics, View};
+use crate::integration::{FrameInput, FrameOutput, Keybind};
+use crate::preset::*;
+use crate::preset_placer::PresetPlacer;
+use crate::scene::{Device, Scene, SceneItem};
+use crate::settings::Settings;
 use crate::*;
-use eframe::egui::*;
-use std::time::SystemTime;
+use egui::*;
 
 const COMBINATIONAL_MSG: &str = "will use a truth table for the created preset";
 const SAVE_SCENE_MSG: &str =
@@ -33,158 +33,155 @@ impl CreatePreset {
     }
 }
 
-#[derive(Clone)]
-struct PresetPlacer {
-    pub pos: Pos2,
-    pub width: f32,
-    pub first_frame: bool,
-    pub field: String,
-    pub results: Vec<String>,
-    pub sel: usize,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AppItem {
+    // off screen, or undetermined
+    None,
+    SceneBackground,
+    SceneItem(SceneItem),
+    EditPopup,
+    Other,
+    PresetPlacer,
 }
-impl PresetPlacer {
-    pub fn new(pos: Pos2) -> Self {
-        Self {
-            pos,
-            width: 100.0,
-            first_frame: true,
-            field: String::new(),
-            results: Vec::new(),
-            sel: 0,
+impl Default for AppItem {
+    fn default() -> Self {
+        Self::None
+    }
+}
+impl AppItem {
+    /// If a.layer() > b.layer(), then a is shown above b
+    pub fn layer(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::SceneBackground => 1,
+            Self::SceneItem(_) => 2,
+            Self::EditPopup => 3,
+            Self::Other => 4,
+            Self::PresetPlacer => 5,
+        }
+    }
+
+    /// Replaces self with other if other is shown above self
+    pub fn cond_replace(&mut self, other: AppItem) {
+        if other.layer() > self.layer() {
+            *self = other;
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum AppItem {
-    SceneItem(SceneItem),
-    SceneBackground,
-    EditPopup,
-    PresetPlacer,
-    Other,
+pub struct CreateApp {
+    pub settings: Settings,
+    pub presets: Presets,
+    pub scene: Scene,
+    pub keybind_toggle_auto_link: Keybind,
+    pub keybind_duplicate_devices: Keybind,
+    pub keybind_step_sim: Keybind,
 }
 
 pub struct App {
-    settings: Settings,
-    presets: Presets,
+    pub settings: Settings,
+    pub presets: Presets,
+    pub scene: Scene,
 
-    scene: Scene,
     view: View,
     paused: bool,
     speed: u32,
 
-    input: FrameInput,
+    /// If there is a focused text field this frame
+    focused_text_field: bool,
     /// Where the pointer was when the context menu was opened
     context_menu_pos: Pos2,
     /// What preset we've selected in the presets menu
-    preset_menu_sel: Option<String>,
-    /// What app item is the pointer over this frame
-    hovered: AppItem,
-    /// What app item was the pointer over previous frame
-    prev_hovered: AppItem,
+    presets_menu_sel: Option<String>,
     /// If we right click on some scene item, shows a popup
     edit_popup: Option<SceneItem>,
     /// If we started creating some links
     link_starts: Vec<LinkStart<u64>>,
     /// The config for creating a new preset from the scene
     create_preset: CreatePreset,
+    /// If there was an error creating a preset
+    create_err: Option<String>,
     /// The small window for searching and placing presets
-    preset_placer: Option<PresetPlacer>,
-    /// A list of the presets we've picked from the preset picker
+    preset_placer: PresetPlacer,
+    /// A list of the presets we've picked from the preset placer
     held_presets: Vec<String>,
     /// If we've selected multiple devices for bulk actions
     selected_devices: Vec<u64>,
     /// If true, we should automatically start/finish a link when we hover the pin
     auto_link: bool,
-    /// The time of the most recent auto-save
-    last_save: SystemTime,
 
-    debug_device_ids: bool,
-    debug_misc: bool,
+    // --- keybinds ---
+    keybind_toggle_auto_link: Keybind,
+    keybind_duplicate_devices: Keybind,
+    keybind_step_sim: Keybind,
 }
 impl App {
-    pub fn new() -> Self {
-        let settings = settings::load_settings().unwrap_res_or(Settings::default);
-        let presets = settings::load_presets().unwrap_res_or(Presets::default);
-        let scene = settings::load_scene().unwrap_res_or(Scene::new);
-
+    pub fn new(create: CreateApp) -> Self {
         Self {
-            settings,
-            presets,
+            settings: create.settings,
+            presets: create.presets,
+            scene: create.scene,
 
-            scene,
             view: View::default(),
             paused: false,
             speed: 1,
 
-            input: FrameInput::default(),
+            focused_text_field: false,
             context_menu_pos: Pos2::ZERO,
-            preset_menu_sel: None,
-            hovered: AppItem::Other,
-            prev_hovered: AppItem::Other,
+            presets_menu_sel: None,
             edit_popup: None,
-
             link_starts: Vec::new(),
             create_preset: CreatePreset::default(),
-            preset_placer: None,
+            create_err: None,
+            preset_placer: PresetPlacer::default(),
             held_presets: Vec::new(),
             selected_devices: Vec::new(),
             auto_link: false,
-            last_save: SystemTime::now(),
 
-            debug_device_ids: false,
-            debug_misc: false,
+            keybind_toggle_auto_link: create.keybind_toggle_auto_link,
+            keybind_duplicate_devices: create.keybind_duplicate_devices,
+            keybind_step_sim: create.keybind_step_sim,
         }
     }
 
     pub fn create(&mut self) {
-        let mut create_preset = CreatePreset {
-            name: CreatePreset::default().name,
-            ..self.create_preset.clone()
-        };
-        std::mem::swap(&mut create_preset, &mut self.create_preset);
-
-        let CreatePreset {
-            name,
-            color,
-            cat,
-            combinational,
-            save_scene,
-            ..
-        } = create_preset;
-
-        let data = if combinational {
-            match CombGatePreset::from_scene(&mut self.scene) {
+        self.create_err = None;
+        let data = if self.create_preset.combinational {
+            match CombGatePreset::from_scene(&self.scene) {
                 Ok(v) => PresetData::CombGate(v),
                 Err(e) => {
-                    eprintln!("Can't create combination gate: {}", e);
+                    self.create_err = Some(format!("Can't create combination gate: {}", e));
                     return;
                 }
             }
         } else {
-            let chip = ChipPreset::from_scene(&self.scene);
-            PresetData::Chip(chip)
+            PresetData::Chip(ChipPreset::from_scene(&self.scene))
         };
-        let preset = DevicePreset {
+
+        let save_scene = self.create_preset.save_scene;
+        self.presets.add_preset(DevicePreset {
             data,
-            name,
-            color: color.to_array(),
+            name: self.create_preset.name.clone(),
+            color: self.create_preset.color.to_array(),
             src: PresetSource::Scene(save_scene.then(|| self.scene.clone())),
-            cat,
-        };
-        self.presets.add_preset(preset);
+            cat: self.create_preset.cat.clone(),
+        });
         self.scene = Scene::new();
+
+        let cat = self.create_preset.cat.clone();
+        self.create_preset = CreatePreset::default();
+        self.create_preset.cat = cat;
     }
     pub fn place_preset(&mut self, name: &str, pos: Pos2) {
         if let Some(preset) = self.presets.get_preset(name) {
             let device = Device::from_preset(preset, pos);
             self.scene.add_device(rand_id(), device);
+            self.preset_placer.push_recent(name);
         }
     }
     pub fn load_preset(&mut self, name: &str) {
         let preset = self.presets.get_preset(name).unwrap().clone();
         let PresetSource::Scene(Some(scene)) = preset.src.clone() else {
-        	eprintln!("this preset doesn't have a scene source!");
         	return;
         };
         if matches!(preset.data, PresetData::CombGate(_)) {
@@ -216,10 +213,7 @@ impl App {
             LinkStart::Input(id) => {
                 let device_input = match target {
                     LinkTarget::DeviceInput(device, input) => DeviceInput(device, input),
-                    LinkTarget::Output(_) => {
-                        println!("A scene input can't be linked to a scene output");
-                        return false;
-                    }
+                    LinkTarget::Output(_) => return false,
                 };
                 NewLink::InputToDeviceInput(id, device_input)
             }
@@ -233,7 +227,7 @@ impl App {
     // -----------------------------------------------------------
     // GUI
 
-    pub fn settings_menu(&mut self, ui: &mut Ui) {
+    pub fn settings_menu(&mut self, ui: &mut Ui, output: &mut FrameOutput) {
         const SPACE: f32 = 10.0;
         fn slider(ui: &mut Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>) {
             ui.horizontal(|ui| {
@@ -252,12 +246,7 @@ impl App {
 
         ui.horizontal(|ui| {
             ui.heading("Settings");
-            if ui.button("reload").clicked() {
-                match settings::load_settings() {
-                    Ok(settings) => self.settings = settings,
-                    Err(err) => err.log(),
-                }
-            }
+            output.load_settings = ui.button("reload").clicked();
             if ui.button("reset").clicked() {
                 self.settings = Settings::default();
             }
@@ -271,19 +260,7 @@ impl App {
         checkbox(ui, "high contrast: ", &mut s.high_contrast);
         ui.horizontal(|ui| {
             ui.add_space(SPACE);
-            if ui.button("open config folder").clicked() {
-                let path = String::from(settings::config_dir().to_str().unwrap());
-                if let Err(err) = settings::reveal_dir(&path) {
-                    eprintln!("failed to open config dir {:?}: {:?}", path, err);
-                }
-            }
-        });
-        let mut save = false;
-        ui.horizontal(|ui| {
-            ui.add_space(SPACE);
-            if ui.button("save").clicked() {
-                save = true;
-            }
+            output.reveal_persist_dir = ui.button("open config folder").clicked();
         });
 
         ui.heading("Scene IO");
@@ -302,46 +279,22 @@ impl App {
             &mut s.device_min_pin_spacing,
             1.0..=100.0,
         );
-
-        if s.dev_options {
-            ui.heading("Debug");
-            checkbox(ui, "device IDs: ", &mut self.debug_device_ids);
-            checkbox(ui, "misc: ", &mut self.debug_misc);
-        }
-
-        if save {
-            settings::save_settings(&self.settings).log_err();
-            settings::save_presets(&mut self.presets).log_err();
-            settings::save_scene(&self.scene).log_err();
-        }
     }
 
-    pub fn presets_menu(&mut self, ui: &mut Ui) {
+    pub fn presets_menu(&mut self, ui: &mut Ui, output: &mut FrameOutput) {
         ui.horizontal(|ui| {
             ui.heading("Presets");
-            if ui.button("reload").clicked() {
-                match settings::load_presets() {
-                    Ok(presets) => self.presets = presets,
-                    Err(err) => err.log(),
-                }
-            }
-            if ui.button("import").clicked() {
-                if let Some(mut path) = rfd::FileDialog::new().pick_folder() {
-                    match settings::load_presets_at(&mut path) {
-                        Ok(presets) => self.presets.merge(&presets),
-                        Err(err) => err.log(),
-                    }
-                }
-            }
+            output.load_presets = ui.button("reload").clicked();
+            output.import_presets = ui.button("import").clicked();
         });
         ui.separator();
 
         'sel: {
-            let Some(preset) = &self.preset_menu_sel else {
+            let Some(preset) = &self.presets_menu_sel else {
         		break 'sel;
         	};
             let Some(preset) = self.presets.get_preset(preset) else {
-        		self.preset_menu_sel = None;
+        		self.presets_menu_sel = None;
         		break 'sel;
         	};
             let name = preset.name.clone();
@@ -374,24 +327,24 @@ impl App {
             };
             stat(stat_str);
 
-            let mut load = false;
-            let mut delete = false;
+            let [mut load, mut delete, mut place] = [false; 3];
             ui.horizontal(|ui| {
-                delete = ui.add_enabled(can_del, Button::new("delete")).clicked();
-                load = ui.add_enabled(can_load, Button::new("load")).clicked();
                 if self.settings.dev_options {
                     if ui.button("debug").clicked() {
                         println!("{:#?}", preset);
                     }
                 }
+                delete = ui.add_enabled(can_del, Button::new("delete")).clicked();
+                load = ui.add_enabled(can_load, Button::new("load")).clicked();
+                place = ui.button("place").clicked();
             });
-
-            match (load, delete) {
-                (true, _) => self.load_preset(&name),
-                (_, true) => self.presets.remove_preset(&name),
+            ui.separator();
+            match (load, delete, place) {
+                (true, _, _) => self.load_preset(&name),
+                (_, true, _) => self.presets.remove_preset(&name),
+                (_, _, true) => self.held_presets.push(name),
                 _ => {}
             }
-            ui.separator();
         }
 
         let mut sel_preset: Option<String> = None;
@@ -402,7 +355,7 @@ impl App {
                     if rs.clicked() {
                         sel_preset = Some(preset.name.clone());
                     }
-                    if self.preset_menu_sel.as_ref() == Some(&preset.name) {
+                    if self.presets_menu_sel.as_ref() == Some(&preset.name) {
                         ui.painter().add(Shape::rect_stroke(
                             rs.rect,
                             Rounding::none(),
@@ -413,7 +366,7 @@ impl App {
             });
         }
         if let Some(preset) = sel_preset {
-            self.preset_menu_sel = Some(preset);
+            self.presets_menu_sel = Some(preset);
         }
     }
 
@@ -440,45 +393,54 @@ impl App {
         ui.separator();
         ui.horizontal(|ui| {
             ui.add_space(LEFT_SP);
-            ui.text_edit_singleline(&mut self.create_preset.cat);
+            let rs = ui.text_edit_singleline(&mut self.create_preset.cat);
+            if rs.has_focus() {
+                self.focused_text_field = true;
+            }
             ui.add_space(5.0);
         });
         ui.add_space(5.0);
     }
 
-    pub fn top_panel(&mut self, ui: &mut Ui) {
+    pub fn top_panel(&mut self, ui: &mut Ui, output: &mut FrameOutput) {
         ui.group(|ui| {
             ui.menu_button("Settings", |ui| {
-                self.hovered = AppItem::Other;
+                output.hovered.cond_replace(AppItem::Other);
                 *ui.visuals_mut() = self.settings.visuals();
-                self.settings_menu(ui);
+                self.settings_menu(ui, output);
             });
             ui.menu_button("Presets", |ui| {
-                self.hovered = AppItem::Other;
+                output.hovered.cond_replace(AppItem::Other);
                 *ui.visuals_mut() = self.settings.visuals();
-                self.presets_menu(ui);
+                self.presets_menu(ui, output);
             });
 
-            if ui.button("Create").on_hover_text(CREATE_MSG).clicked() {
+            let mut rs = ui.button("Create");
+            rs = match &self.create_err {
+                Some(msg) => rs.on_hover_text(RichText::new(msg).color(Color32::RED)),
+                None => rs.on_hover_text(CREATE_MSG),
+            };
+            if rs.clicked() {
                 self.create();
             }
         });
 
         let rs = ui.color_edit_button_srgba(&mut self.create_preset.color);
-        // there doesn't seem to be a way to check if the pointer is over the color picker.
-        // We only get access to the button. But we can check if the color picker has changed.
         if rs.changed() {
-            self.hovered = AppItem::Other;
+            output.hovered.cond_replace(AppItem::Other);
         }
 
         ui.menu_button(self.create_preset.cat.clone(), |ui| {
-            self.hovered = AppItem::Other;
+            output.hovered.cond_replace(AppItem::Other);
             *ui.visuals_mut() = self.settings.visuals();
             self.cat_menu(ui);
         });
 
         ui.style_mut().spacing.text_edit_width = 100.0;
-        ui.text_edit_singleline(&mut self.create_preset.name);
+        let rs = ui.text_edit_singleline(&mut self.create_preset.name);
+        if rs.has_focus() {
+            self.focused_text_field = true;
+        }
 
         ui.checkbox(&mut self.create_preset.combinational, "Combinational")
             .on_hover_text(COMBINATIONAL_MSG);
@@ -494,63 +456,72 @@ impl App {
             }
             if ui
                 .add_enabled(self.paused, Button::new("Step"))
-                .on_hover_text(format!("{CMD_KEY} + S"))
+                .on_hover_text(self.keybind_step_sim.show())
                 .clicked()
             {
                 self.scene.update();
             }
-            ui.add(Slider::new(&mut self.speed, 1..=999));
+            if ui.add_enabled(self.speed > 1, Button::new("-")).clicked() {
+                self.speed /= 2;
+            }
+            if ui.button("+").clicked() {
+                self.speed *= 2;
+            }
+            ui.label(format!("{} (speed)", self.speed));
         });
 
-        if ui.button("Clear").clicked() {
+        let label = {
+            let count =
+                self.scene.devices.len() + self.scene.inputs.len() + self.scene.outputs.len();
+            if count > 0 {
+                format!("Clear ({count} items)")
+            } else {
+                String::from("Clear")
+            }
+        };
+        if ui.button(label).clicked() {
             self.scene = Scene::new();
+            self.selected_devices.clear();
         }
 
         ui.label("Auto link: ").on_hover_text(AUTO_LINK_MSG);
         ui.checkbox(&mut self.auto_link, "")
-            .on_hover_text(format!("{CMD_KEY} + L"));
+            .on_hover_text(self.keybind_toggle_auto_link.show());
     }
 
-    pub fn central_panel(&mut self, ui: &mut Ui) {
+    pub fn central_panel(&mut self, ui: &mut Ui, input: &FrameInput, output: &mut FrameOutput) {
         let (painter_rs, painter) = ui.allocate_painter(ui.available_size(), Sense::hover());
         self.scene.rect = painter_rs.rect;
         self.view.origin = self.scene.rect.min;
 
-        let mut g = Graphics::new(ui, painter_rs.rect, self.input.pointer_pos);
+        let mut g = Graphics::new(ui, input.pointer_pos);
 
-        self.show_scene(&mut g);
-        painter.extend(g.shapes.drain(..));
-
-        // SHOW LINKS TO CURSOR
-        for idx in (0..self.link_starts.len()).rev() {
-            let link_start = &self.link_starts[idx];
-            if let Some(state) = self.scene.get_link_start(link_start) {
-                use graphics::{link_start_pos, show_link};
-
-                if let Some(pos) =
-                    link_start_pos(&self.settings, &self.view, &self.scene, *link_start)
-                {
-                    show_link(&mut g, &self.settings, state, pos, self.input.pointer_pos);
-                } else {
-                    self.link_starts.remove(idx);
-                }
-            } else {
-                self.link_starts.remove(idx);
-            }
-
-            if self.input.pressed_esc {
-                self.link_starts.remove(idx);
-            }
+        if let Some(item) = self.show_scene(&mut g) {
+            output.hovered.cond_replace(AppItem::SceneItem(item));
         }
+        self.show_selected_devices(&mut g, input);
 
-        // SHOW HELD PRESETS
-        if self.input.pressed_esc {
+        // --- show links to pointer ---
+        for idx in (0..self.link_starts.len()).rev() {
+            let link_start = self.link_starts[idx].clone();
+            let Some(state) = self.scene.get_link_start(link_start) else {
+            	self.link_starts.remove(idx);
+            	continue;
+            };
+            use graphics::{link_start_pos, show_link};
+
+            let pos = link_start_pos(&self.settings, &self.view, &self.scene, link_start).unwrap();
+            show_link(&mut g, &self.settings, state, pos, input.pointer_pos);
+        }
+        if input.pressed(Key::Escape) {
+            self.link_starts.clear();
             self.held_presets.clear();
         }
 
+        // --- show held presets ---
         if self.held_presets.len() > 1 {
             g.text(
-                self.input.pointer_pos + Vec2::new(30.0, 0.0),
+                input.pointer_pos + Vec2::new(30.0, 0.0),
                 20.0,
                 &format!("{}", self.held_presets.len()),
                 Color32::WHITE,
@@ -558,26 +529,40 @@ impl App {
             );
         }
 
-        let mut pos = self.input.pointer_pos + Vec2::new(0.0, 10.0);
+        let mut pos = input.pointer_pos + Vec2::new(0.0, 10.0);
         for name in &self.held_presets {
             let preset = self.presets.get_preset(name).unwrap();
 
             graphics::show_device_preset(&mut g, &self.settings, &self.view, pos, preset);
             pos.y += preset.size(&self.settings).y * self.view.scale();
         }
-
-        // SHOW PRESET PLACER
-        self.show_preset_placer(&mut g.ui);
-
         painter.extend(g.shapes);
 
-        // SHOW EDIT POPUP
-        if self.show_edit_popup(ui).is_none() {
-            self.edit_popup = None;
+        match self.show_edit_popup(ui, input) {
+            None => self.edit_popup = None,
+            Some(true) => output.hovered.cond_replace(AppItem::EditPopup),
+            Some(_) => {}
+        }
+        let request_focus = input.pressed(Key::Space) && !self.focused_text_field;
+        let rs = self.preset_placer.show(
+            self.settings.preset_placer_pos,
+            ui,
+            input,
+            &self.presets,
+            request_focus,
+        );
+        if rs.hovered {
+            output.hovered.cond_replace(AppItem::PresetPlacer);
+        }
+        if rs.has_focus {
+            self.focused_text_field = true;
+        }
+        if let Some(preset) = rs.picked {
+            self.held_presets.push(preset);
         }
     }
 
-    pub fn show_edit_popup(&mut self, ui: &mut Ui) -> Option<()> {
+    pub fn show_edit_popup(&mut self, ui: &mut Ui, input: &FrameInput) -> Option<bool> {
         let Some(item) = &self.edit_popup else {
         	return None
         };
@@ -620,17 +605,55 @@ impl App {
         let mut child_ui = ui.child_ui(rect, ui.layout().clone());
         let rs = Frame::menu(child_ui.style()).show(&mut child_ui, |ui| match item.clone() {
             SceneItem::InputBulb(id) => {
+                let input = self.scene.inputs.get(&id).unwrap();
+                let group_count = input
+                    .group_member
+                    .map(|id| self.scene.input_groups.get(&id).unwrap().members.len());
                 let input = self.scene.inputs.get_mut(&id).unwrap();
                 ui.horizontal(|ui| {
                     ui.label("name: ");
-                    ui.text_edit_singleline(&mut input.name);
+                    ui.text_edit_singleline(&mut input.name).request_focus();
+                    self.focused_text_field = true;
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(5.0);
+                    let label = if let Some(count) = group_count {
+                        format!("stack ({count})")
+                    } else {
+                        String::from("stack")
+                    };
+                    if ui.button(label).clicked() {
+                        self.scene.stack_input(id, &self.settings);
+                    }
+                    if ui.button("delete").clicked() {
+                        self.scene.del_input(id);
+                    }
                 });
             }
             SceneItem::OutputBulb(id) => {
+                let output = self.scene.outputs.get(&id).unwrap();
+                let group_count = output
+                    .group_member
+                    .map(|id| self.scene.output_groups.get(&id).unwrap().members.len());
                 let output = self.scene.outputs.get_mut(&id).unwrap();
                 ui.horizontal(|ui| {
                     ui.label("name: ");
-                    ui.text_edit_singleline(&mut output.name);
+                    ui.text_edit_singleline(&mut output.name).request_focus();
+                    self.focused_text_field = true;
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(5.0);
+                    let label = if let Some(count) = group_count {
+                        format!("stack ({count})")
+                    } else {
+                        String::from("stack")
+                    };
+                    if ui.button(label).clicked() {
+                        self.scene.stack_output(id, &self.settings);
+                    }
+                    if ui.button("delete").clicked() {
+                        self.scene.del_output(id);
+                    }
                 });
             }
             SceneItem::InputGroup(id) => {
@@ -679,233 +702,181 @@ impl App {
             }
             _ => unreachable!(),
         });
-        if !rs.response.hovered() && self.input.pressed_prim {
+        if !rs.response.hovered() && input.pressed_prim {
             self.edit_popup = None;
         }
-        if rs.response.hovered() {
-            self.hovered = AppItem::EditPopup;
-        }
-        Some(())
+        Some(rs.response.hovered())
     }
 
-    pub fn show_scene(&mut self, g: &mut Graphics) {
+    pub fn show_scene(&mut self, g: &mut Graphics) -> Option<SceneItem> {
         let mut dead_links = Vec::new();
-        let scene_hovered = graphics::show_scene(
+        let output_link_err = match self.link_starts.last() {
+            Some(LinkStart::Input(_)) => true,
+            _ => false,
+        };
+        let hovered = graphics::show_scene(
             g,
             &self.settings,
             &self.view,
             &self.scene,
             &mut dead_links,
-            self.debug_device_ids,
+            output_link_err,
         );
 
-        // HANDLE DEAD LINKS
+        // --- Remove the dead links ---
+        // the dead links need to be sorted in reverse by the link index
+        // so that when I go through and remove them, I don't invalidate other link indices
         dead_links.sort_by(|a, b| a.1.cmp(&b.1).reverse());
-        for (start, link_idx) in dead_links {
-            match start {
+        for (link_start, link_idx) in dead_links {
+            match link_start {
                 LinkStart::Input(input) => {
-                    self.scene
-                        .inputs
-                        .get_mut(&input)
-                        .unwrap()
-                        .links
-                        .remove(link_idx);
+                    let input = self.scene.inputs.get_mut(&input).unwrap();
+                    input.links.remove(link_idx);
                 }
                 LinkStart::DeviceOutput(device, output) => {
-                    self.scene.devices.get_mut(&device).unwrap().links[output].remove(link_idx);
+                    let device = self.scene.devices.get_mut(&device).unwrap();
+                    device.links[output].remove(link_idx);
                 }
             };
         }
+        hovered
+    }
 
-        // HANDLE SCENE INTERACTIONS
-        if let Some(item) = scene_hovered {
-            self.hovered = AppItem::SceneItem(item);
-            let try_link = self.auto_link && self.prev_hovered != AppItem::SceneItem(item);
-
-            match item {
-                SceneItem::Device(id) => {
-                    if self.input.pressed_del {
+    pub fn scene_input(&mut self, input: &FrameInput) {
+        let AppItem::SceneItem(item) = input.prev_hovered else {
+    		return;
+    	};
+        let try_link = self.auto_link && input.hovered_changed;
+        match item {
+            SceneItem::Device(id) => {
+                if input.pressed(Key::Backspace) {
+                    if self.selected_devices.contains(&id) {
+                        for id in &self.selected_devices {
+                            self.scene.del_device(*id);
+                        }
+                        self.selected_devices.clear();
+                    } else {
                         self.scene.del_device(id);
                     }
-                    if self.input.pressed_prim && self.input.shift {
+                }
+                if input.pressed_prim && input.modifiers.shift {
+                    if !self.selected_devices.contains(&id) {
                         self.selected_devices.push(id);
                     }
                 }
-                SceneItem::InputBulb(id) => {
-                    if self.input.clicked_prim {
-                        let state = self.scene.inputs.get(&id).unwrap().state;
-                        self.scene.set_input(id, !state);
-                    }
-                    if self.input.pressed_sec {
-                        self.edit_popup = Some(item);
-                    }
-                    if self.input.pressed_del {
-                        self.scene.del_input(id);
-                    }
-                    if self.input.pressed_down {
-                        self.scene.stack_input(id, &self.settings);
-                    }
-                    if self.input.pressed_up {
-                        self.scene.unstack_input(id);
-                    }
+            }
+            SceneItem::InputBulb(id) => {
+                if input.clicked_prim {
+                    let state = self.scene.inputs.get(&id).unwrap().state;
+                    self.scene.set_input(id, !state);
                 }
-                SceneItem::InputPin(id) => {
-                    if self.input.pressed_prim || try_link {
-                        self.start_link(LinkStart::Input(id));
-                    }
+                if input.pressed_sec {
+                    self.edit_popup = Some(item);
                 }
-                SceneItem::InputLink(input_id, link_idx) => {
-                    if self.input.pressed_del {
-                        let links = &mut self.scene.inputs.get_mut(&input_id).unwrap().links;
-                        let link = links[link_idx].clone();
-                        links.remove(link_idx);
-                        self.scene.write_queue.push(link.wrap(), false);
-                    }
+                if input.pressed(Key::Backspace) && !self.focused_text_field {
+                    self.scene.del_input(id);
                 }
-                SceneItem::InputGroup(_) => {
-                    if self.input.pressed_sec {
-                        self.edit_popup = Some(item);
-                    }
+                if input.pressed(Key::ArrowDown) {
+                    self.scene.stack_input(id, &self.settings);
                 }
-                SceneItem::OutputBulb(id) => {
-                    if self.input.pressed_del {
-                        self.scene.del_output(id);
-                    }
-                    if self.input.pressed_sec {
-                        self.edit_popup = Some(item);
-                    }
-                    if self.input.pressed_down {
-                        self.scene.stack_output(id, &self.settings);
-                    }
-                    if self.input.pressed_up {
-                        self.scene.unstack_output(id);
-                    }
+                if input.pressed(Key::ArrowUp) {
+                    self.scene.unstack_input(id);
                 }
-                SceneItem::OutputGroup(_) => {
-                    if self.input.pressed_sec {
-                        self.edit_popup = Some(item);
-                    }
+            }
+            SceneItem::InputPin(id) => {
+                if input.pressed_prim || try_link {
+                    self.start_link(LinkStart::Input(id));
                 }
-                SceneItem::OutputPin(id) => {
-                    if self.input.pressed_prim || try_link {
-                        self.finish_link(LinkTarget::Output(id));
-                    }
+            }
+            SceneItem::InputLink(input_id, link_idx) => {
+                if input.pressed(Key::Backspace) {
+                    let links = &mut self.scene.inputs.get_mut(&input_id).unwrap().links;
+                    let link = links[link_idx].clone();
+                    links.remove(link_idx);
+                    self.scene.write_queue.push(link.wrap(), false);
                 }
-                SceneItem::DeviceInput(device, input) => {
-                    let mut created_link = false;
-                    if self.input.pressed_prim || try_link {
-                        created_link = self.finish_link(LinkTarget::DeviceInput(device, input));
-                    }
-                    if self.input.pressed_prim && !created_link {
-                        let state = self.scene.get_device_input(device, input).unwrap();
-                        self.scene.set_device_input(device, input, !state);
-                    }
+            }
+            SceneItem::InputGroup(_) => {
+                if input.pressed_sec {
+                    self.edit_popup = Some(item);
                 }
-                SceneItem::DeviceOutput(device, output) => {
-                    if self.input.pressed_prim || try_link {
-                        self.start_link(LinkStart::DeviceOutput(device, output));
-                    }
-                    if self.input.pressed_del {
-                        let device = self.scene.devices.get_mut(&device).unwrap();
-                        device.links[output].clear();
-                    }
+            }
+            SceneItem::OutputBulb(id) => {
+                if input.pressed(Key::Backspace) {
+                    self.scene.del_output(id);
                 }
-                SceneItem::DeviceOutputLink(device_id, output_idx, link_idx) => {
-                    if self.input.pressed_del {
-                        let links =
-                            &mut self.scene.devices.get_mut(&device_id).unwrap().links[output_idx];
-                        let link = links[link_idx].clone();
-                        links.remove(link_idx);
-                        self.scene.write_queue.push(link, false);
-                    }
+                if input.pressed_sec {
+                    self.edit_popup = Some(item);
+                }
+                if input.pressed(Key::ArrowDown) && !self.focused_text_field {
+                    self.scene.stack_output(id, &self.settings);
+                }
+                if input.pressed(Key::ArrowUp) {
+                    self.scene.unstack_output(id);
+                }
+            }
+            SceneItem::OutputGroup(_) => {
+                if input.pressed_sec {
+                    self.edit_popup = Some(item);
+                }
+            }
+            SceneItem::OutputPin(id) => {
+                if input.pressed_prim || try_link {
+                    self.finish_link(LinkTarget::Output(id));
+                }
+            }
+            SceneItem::DeviceInput(device, device_input) => {
+                let mut created_link = false;
+                if input.pressed_prim || try_link {
+                    created_link = self.finish_link(LinkTarget::DeviceInput(device, device_input));
+                }
+                if input.pressed_prim && !created_link {
+                    let state = self.scene.get_device_input(device, device_input).unwrap();
+                    self.scene.set_device_input(device, device_input, !state);
+                }
+            }
+            SceneItem::DeviceOutput(device, output) => {
+                if input.pressed_prim || try_link {
+                    self.start_link(LinkStart::DeviceOutput(device, output));
+                }
+                if input.pressed(Key::Backspace) {
+                    let device = self.scene.devices.get_mut(&device).unwrap();
+                    device.links[output].clear();
+                }
+            }
+            SceneItem::DeviceOutputLink(device_id, output_idx, link_idx) => {
+                if input.pressed(Key::Backspace) {
+                    let links =
+                        &mut self.scene.devices.get_mut(&device_id).unwrap().links[output_idx];
+                    let link = links[link_idx].clone();
+                    links.remove(link_idx);
+                    self.scene.write_queue.push(link, false);
                 }
             }
         }
     }
 
-    pub fn show_preset_placer(&mut self, ui: &mut Ui) {
-        if self.input.pressed_esc
-            || (self.input.clicked_prim && self.prev_hovered != AppItem::PresetPlacer)
-        {
-            self.preset_placer = None;
-            return;
-        }
-        let Some(picker) = &mut self.preset_placer else {
-        	return
-        };
-        let size = Vec2::new(picker.width, 20.0);
-        let rect = Rect::from_min_size(picker.pos, size);
-
-        if self.input.pressed_up && picker.sel > 0 {
-            picker.sel -= 1;
-        }
-        if self.input.pressed_down && picker.sel < picker.results.len() - 1 {
-            picker.sel += 1;
-        }
-        if picker.sel >= picker.results.len() && picker.sel != 0 {
-            picker.sel = picker.results.len() - 1;
-        }
-
-        let mut place_preset = false;
-        let mut grab_preset = None;
-        let mut ui = ui.child_ui(rect, ui.layout().clone());
-        let frame_rs = Frame::menu(ui.style()).show(&mut ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(5.0);
-                let rs = ui.text_edit_singleline(&mut picker.field);
-                if rs.lost_focus() && self.input.pressed_enter {
-                    place_preset = true;
-                }
-                rs.request_focus();
-            });
-            for (idx, result) in picker.results.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.add_space(5.0);
-                    let rs = ui.label(result);
-                    if rs.rect.contains(self.input.pointer_pos) && self.input.clicked_prim {
-                        grab_preset = Some(result.clone());
-                    }
-                    if idx == picker.sel || rs.hovered() {
-                        ui.painter().add(Shape::rect_stroke(
-                            rs.rect,
-                            Rounding::none(),
-                            Stroke::new(1.0, Color32::from_gray(200)),
-                        ));
-                    }
-                });
+    pub fn show_selected_devices(&mut self, g: &mut Graphics, input: &FrameInput) {
+        let mut clear = input.prev_hovered != AppItem::Other;
+        for device_id in &self.selected_devices {
+            if input.prev_hovered == AppItem::SceneItem(SceneItem::Device(*device_id)) {
+                clear = false;
             }
-        });
-        picker.first_frame = false;
-        picker.width = frame_rs.response.rect.width();
-
-        let (pos, field, sel) = (picker.pos, picker.field.clone(), picker.sel);
-        // (drop picker borrow)
-        if frame_rs.response.rect.contains(self.input.pointer_pos) {
-            self.hovered = AppItem::PresetPlacer;
+            let device = self.scene.devices.get(device_id).unwrap();
+            let pos = graphics::device_pos(device, &self.view);
+            let size = graphics::device_size(device, &self.settings, &self.view);
+            let rect = Rect::from_min_size(pos, size);
+            let (rounding, stroke) = (Rounding::same(2.0), Stroke::new(2.0, Color32::WHITE));
+            g.shapes.push(Shape::rect_stroke(rect, rounding, stroke));
         }
-        let mut results = Vec::new();
-        for preset in self.presets.get() {
-            if preset.name.to_lowercase().contains(&field.to_lowercase()) {
-                results.push(preset.name.clone());
-            }
-            if results.len() >= 6 {
-                break;
-            }
+        if input.clicked_prim && !input.modifiers.shift && clear {
+            self.selected_devices.clear();
         }
-        if let Some(preset) = grab_preset {
-            self.held_presets.push(preset);
-        }
-        if place_preset && sel < results.len() {
-            self.preset_placer = None;
-            let pos = self.view.unmap_pos(pos);
-            self.place_preset(&results[sel], pos);
-            return;
-        }
-        self.preset_placer.as_mut().unwrap().results = results;
     }
 
-    pub fn misc_debug(&mut self, ui: &mut Ui) {
-        ui.label(format!("hovered: {:?}", self.prev_hovered));
+    pub fn misc_debug(&mut self, ui: &mut Ui, input: &FrameInput) {
+        ui.label(format!("hovered: {:?}", input.prev_hovered));
+        ui.label(format!("selected: {:?}", self.selected_devices));
         ui.label("write queue: ");
         for write in &self.scene.write_queue.0 {
             ui.horizontal(|ui| {
@@ -917,51 +888,82 @@ impl App {
             });
         }
     }
-}
-impl eframe::App for App {
-    fn update(&mut self, ctx: &Context, _win_frame: &mut eframe::Frame) {
-        self.input.update(ctx, self.hovered);
 
-        self.prev_hovered = self.hovered;
-        self.hovered = if self.scene.rect.contains(self.input.pointer_pos) {
-            AppItem::SceneBackground
+    pub fn clone_selected_devices(&mut self, pointer_pos: Pos2) {
+        let mut selection_min = Pos2::new(f32::INFINITY, f32::INFINITY);
+        let mut devices = Vec::with_capacity(self.selected_devices.len());
+        for device_id in &self.selected_devices {
+            let device = self.scene.devices.get(device_id).unwrap();
+            selection_min.x = f32::min(selection_min.x, device.pos.x);
+            selection_min.y = f32::min(selection_min.y, device.pos.y);
+            devices.push(device.clone());
+        }
+        let offset = self.view.unmap_pos(pointer_pos) - selection_min;
+        let mut ids = Vec::with_capacity(devices.len());
+        for mut device in devices {
+            device.pos += offset;
+            let id = rand_id();
+            self.scene.add_device(id, device);
+            ids.push(id);
+        }
+        self.selected_devices = ids;
+    }
+
+    pub fn update(&mut self, ctx: &Context, input: &FrameInput) -> FrameOutput {
+        let mut output = FrameOutput::default();
+        self.focused_text_field = false;
+
+        if self.scene.rect.contains(input.pointer_pos) {
+            output.hovered.cond_replace(AppItem::SceneBackground);
         } else {
-            AppItem::Other
-        };
-
-        if self.input.pressed_s && self.input.cmd && self.paused {
-            self.scene.update();
-        }
-        if self.input.pressed_l && self.input.cmd {
-            self.auto_link = !self.auto_link;
+            output.hovered.cond_replace(AppItem::Other);
         }
 
+        // --- Update sim ---
         if !self.paused {
             for _ in 0..self.speed {
                 self.scene.update();
             }
         }
 
+        // --- Show UI ---
         ctx.set_visuals(self.settings.visuals());
-
         TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| self.top_panel(ui));
-            if self.debug_misc {
-                self.misc_debug(ui);
+            ui.horizontal(|ui| self.top_panel(ui, &mut output));
+            if self.settings.dev_options {
+                self.misc_debug(ui, &input);
             }
         });
         TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
             ui.horizontal(|ui| self.bottom_panel(ui));
         });
 
-        let rs = CentralPanel::default()
-            .show(ctx, |ui| self.central_panel(ui))
+        let scene_rs = CentralPanel::default()
+            .show(ctx, |ui| self.central_panel(ui, &input, &mut output))
             .response;
 
-        if let Some((delta, item)) = self.input.drag_delta() {
+        // --- Handle key binds ---
+        if input.keybind_used(&self.keybind_toggle_auto_link) {
+            self.auto_link = !self.auto_link;
+        }
+        if self.paused && input.keybind_used(&self.keybind_step_sim) {
+            self.scene.update();
+        }
+        if self.selected_devices.len() > 0 && input.keybind_used(&self.keybind_duplicate_devices) {
+            self.clone_selected_devices(input.pointer_pos);
+        }
+
+        // --- Handle scene input ---
+        self.scene_input(&input);
+
+        // --- Handle dragging ---
+        if let Some((delta, item)) = input.drag_delta() {
             match item {
                 AppItem::SceneBackground => {
                     self.view.drag(delta);
+                }
+                AppItem::PresetPlacer => {
+                    self.settings.preset_placer_pos += delta;
                 }
                 AppItem::SceneItem(SceneItem::InputBulb(id)) => {
                     self.scene.drag_input(id, delta * self.view.inv_scale());
@@ -976,43 +978,41 @@ impl eframe::App for App {
                         }
                     } else {
                         self.scene.drag_device(id, delta * self.view.inv_scale());
-                        self.selected_devices.clear();
                     }
                 }
                 _ => {}
             }
         }
 
+        // --- Handle scrolling ---
+        self.view.drag(input.scroll_delta);
+
+        // --- Handle zooming ---
         let zoom_delta = ctx.input().zoom_delta();
         if zoom_delta != 1.0 {
-            let pos = self.input.pointer_pos - self.scene.rect.min;
+            let pos = input.pointer_pos - self.scene.rect.min;
             self.view.zoom(zoom_delta, pos.to_pos2());
         }
 
-        if self.input.pressed_prim
-            && matches!(
-                self.prev_hovered,
-                AppItem::SceneBackground | AppItem::SceneItem(_)
-            )
-        {
-            // PLACE HELD PRESETS
-            if self.held_presets.len() > 0 {
-                let mut held_presets = Vec::new();
-                std::mem::swap(&mut held_presets, &mut self.held_presets);
+        // --- Handle placing inputs & outputs
+        if input.pressed_prim && input.prev_hovered == AppItem::SceneBackground {
+            let col_w = self.settings.scene_pin_col_w * self.view.scale();
+            let output_col_x = self.scene.rect.max.x - col_w;
+            let input_col_x = self.scene.rect.min.x + col_w;
+            let x = input.pointer_pos.x;
+            let y = graphics::unmap_io_y(&self.view, input.pointer_pos.y);
 
-                let mut pos = self
-                    .view
-                    .unmap_pos(self.input.pointer_pos + Vec2::new(0.0, 10.0));
-                for name in held_presets {
-                    self.place_preset(&name, pos);
-
-                    let preset = self.presets.get_preset(&name).unwrap();
-                    pos.y += preset.size(&self.settings).y;
-                }
+            if x < input_col_x {
+                self.scene.add_input(y);
+                output.void_click = true;
+            } else if x > output_col_x {
+                self.scene.add_output(y);
+                output.void_click = true;
             }
         }
 
-        let can_place_device = match self.prev_hovered {
+        // --- Handle placing presets ---
+        let can_place_preset = match input.prev_hovered {
             AppItem::SceneBackground => true,
             AppItem::SceneItem(SceneItem::Device(..)) => true,
             AppItem::SceneItem(SceneItem::DeviceInput(..)) => true,
@@ -1021,73 +1021,58 @@ impl eframe::App for App {
             AppItem::SceneItem(SceneItem::InputLink(..)) => true,
             _ => false,
         };
-        if can_place_device {
-            if ctx.input().pointer.secondary_clicked() {
-                self.context_menu_pos = self.input.pointer_pos;
-            }
-            // CONTEXT MENU (PLACE DEVICES)
-            if ctx.input().key_pressed(Key::Space) {
-                self.preset_placer = Some(PresetPlacer::new(self.input.pointer_pos));
-            }
-            rs.context_menu(|ui| {
-                ui.set_width(100.0);
-                const LEFT_SP: f32 = 15.0;
-                let mut place_preset = None;
+        if self.held_presets.len() > 0 && input.pressed_prim && can_place_preset {
+            let mut held_presets = Vec::new();
+            std::mem::swap(&mut held_presets, &mut self.held_presets);
 
-                for (cat, presets) in self.presets.cats_sorted() {
-                    ui.menu_button(cat, |ui| {
-                        ui.set_width(100.0);
-                        for preset in presets {
-                            if ui.button(&preset.name).clicked() {
-                                place_preset = Some(preset.name.clone());
-                                ui.close_menu();
-                            }
+            let mut pos = self
+                .view
+                .unmap_pos(input.pointer_pos + Vec2::new(0.0, 10.0));
+            for name in held_presets {
+                self.place_preset(&name, pos);
+
+                let preset = self.presets.get_preset(&name).unwrap();
+                pos.y += preset.size(&self.settings).y;
+            }
+        }
+
+        // --- Handle context menu ---
+        if input.pressed_sec {
+            self.context_menu_pos = input.pointer_pos;
+        }
+        scene_rs.context_menu(|ui| {
+            if !can_place_preset {
+                ui.close_menu();
+                return;
+            }
+
+            ui.set_width(100.0);
+            const LEFT_SP: f32 = 15.0;
+            let mut place_preset = None;
+
+            for (cat, presets) in self.presets.cats_sorted() {
+                ui.menu_button(cat, |ui| {
+                    ui.set_width(100.0);
+                    for preset in presets {
+                        if ui.button(&preset.name).clicked() {
+                            place_preset = Some(preset.name.clone());
+                            ui.close_menu();
                         }
-                    });
-                }
-
-                if self.settings.dev_options {
-                    if ui.button("debug").clicked() {
-                        println!("{:#?}", self.scene);
                     }
-                }
-                if let Some(name) = place_preset {
-                    self.place_preset(&name, self.view.unmap_pos(self.context_menu_pos));
-                }
-            });
-        }
-
-        let since_last_save = SystemTime::now().duration_since(self.last_save).unwrap();
-        if since_last_save.as_secs() > 30 {
-            settings::save_settings(&self.settings).log_err();
-            settings::save_presets(&mut self.presets).log_err();
-            settings::save_scene(&self.scene).log_err();
-            self.last_save = SystemTime::now();
-        }
-
-        if self.input.pressed_prim && self.prev_hovered == AppItem::SceneBackground {
-            // PLACE INPUTS/OUTPUTS
-            let col_w = self.settings.scene_pin_col_w;
-            let output_col_x = self.scene.rect.max.x - col_w;
-            let input_col_x = self.scene.rect.min.x + col_w;
-            let x = self.input.pointer_pos.x;
-            let y = graphics::unmap_io_y(&self.view, self.input.pointer_pos.y);
-
-            if x < input_col_x {
-                self.scene.add_input(y);
-                self.input.press_pos = Pos2::ZERO;
-            } else if x > output_col_x {
-                self.scene.add_output(y);
-                self.input.press_pos = Pos2::ZERO;
+                });
             }
-        }
 
-        ctx.request_repaint_after(std::time::Duration::from_millis(1000 / 60))
+            if self.settings.dev_options {
+                if ui.button("debug").clicked() {
+                    println!("{:#?}", self.scene);
+                }
+            }
+            if let Some(name) = place_preset {
+                self.place_preset(&name, self.view.unmap_pos(self.context_menu_pos));
+            }
+        });
+        output
     }
 
-    fn on_exit(&mut self, _ctx: Option<&eframe::glow::Context>) {
-        settings::save_settings(&self.settings).log_err();
-        settings::save_presets(&mut self.presets).log_err();
-        settings::save_scene(&self.scene).log_err();
-    }
+    pub fn on_exit(&mut self) {}
 }

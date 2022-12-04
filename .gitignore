@@ -1,4 +1,5 @@
 /target/
-/Cargo.lock
-/README.html
+/native/target/
+/web/target/
+Cargo.lock
 .DS_Store

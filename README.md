@@ -2,12 +2,22 @@
 Was originally a typo, but is now the name of a Logic Gate simulator. This app is coded in [Rust](https://www.rust-lang.org/) with the [EGUI framework](https://crates.io/crates/eframe).
 
 ## Running
-For MacOS, there are built binaries in `/releases`.
+MacOS is the most supported, but it is also tested on Windows and Linux (debian based).
+In `/releases/latest_date/` there should be built binaries for MacOS, Windows, and Linux.
+
+You can also use LogSimGUI in the browser [here](https://logsimgui.ga).
 
 To build and run from source:
 ```sh
 git clone "https://github.com/MasonFeurer/LogSimGUI.git"
-cd LogSimGUI
+cd LogSimGUI/native
 cargo run
 ```
-Note: as of now, LogSimGUI is only tested on MacOS, so it may not work well if you build it on some other machine.
+On Linux, you may have to install a few packages first:
+```sh
+sudo apt install libglib2.0-dev
+sudo apt install libatk1.0-dev
+sudo apt install libcairo2-dev
+sudo apt install libpango1.0-dev
+sudo apt install librust-gdk-dev
+```

@@ -1,0 +1,13 @@
+[package]
+name = "log-sim-gui-native"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log-sim-gui = { path = ".." }
+serde = { version = "^1", features = ["serde_derive"] }
+eframe = { git = "https://github.com/emilk/egui.git" }
+ron = "0.8"
+bincode = "1.3.3"
+dirs = "4.0"
+rfd = "0.10"

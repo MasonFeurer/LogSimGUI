@@ -3,14 +3,12 @@ use crate::preset::ChipPreset;
 use crate::{BitField, DeviceInput, LinkTarget};
 use serde::{Deserialize, Serialize};
 
-// :DEVICE
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     pub links: Vec<Vec<LinkTarget<usize>>>,
     pub data: CombGate,
 }
 
-// :CHIP
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chip {
     pub write_queue: WriteQueue<usize>,
