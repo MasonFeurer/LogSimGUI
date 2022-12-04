@@ -1,5 +1,5 @@
 use crate::app::AppItem;
-use egui::{Context, Event, Key, Modifiers, Pos2, Vec2};
+use egui::{Context, Event, Key, Modifiers, Pos2, TouchPhase, Vec2};
 use hashbrown::HashSet;
 
 #[cfg(target_os = "macos")]
@@ -78,14 +78,25 @@ pub struct FrameInput {
 impl FrameInput {
     pub fn update(&mut self, ctx: &Context, hovered: AppItem) {
         let input = ctx.input();
+        let mut released_press = input.pointer.any_released();
 
         // key presses
         self.pressed_keys.clear();
         for event in &input.events {
-            let Event::Key { key, pressed: true, .. } = event else {
-        		continue;
-        	};
-            self.pressed_keys.insert(*key);
+            match event {
+                Event::Key {
+                    key, pressed: true, ..
+                } => {
+                    self.pressed_keys.insert(*key);
+                }
+                Event::Touch {
+                    phase: TouchPhase::End | TouchPhase::Cancel,
+                    ..
+                } => {
+                    released_press = true;
+                }
+                _ => {}
+            }
         }
         self.modifiers = input.modifiers;
 
@@ -110,7 +121,7 @@ impl FrameInput {
         self.clicked_prim = input.pointer.primary_released() && self.press_pos == self.pointer_pos;
         self.clicked_sec = input.pointer.secondary_released() && self.press_pos == self.pointer_pos;
 
-        if input.pointer.any_released() {
+        if released_press {
             self.drag = None;
         }
     }

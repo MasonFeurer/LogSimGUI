@@ -87,7 +87,7 @@ impl eframe::App for WebApp {
             save(&mut self.app);
         }
         if output.reveal_persist_dir {
-            console_log!("not available in web");
+            console_log!("opening the config folder is not available in web");
         }
         if output.import_presets {
             let sender = Arc::clone(&merge_presets().0);
@@ -105,7 +105,10 @@ impl eframe::App for WebApp {
             wasm_bindgen_futures::spawn_local(future);
         }
         if output.load_presets {
-            console_log!("not available in web");
+            console_log!("loading presets is not available in web");
+        }
+        if output.load_settings {
+            console_log!("loading settings is not avaliable in web");
         }
 
         ctx.request_repaint_after(Duration::from_millis(1000 / 60));

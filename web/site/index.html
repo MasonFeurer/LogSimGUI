@@ -31,11 +31,17 @@
 	</style>
 </head>
 <body>
+	<p id="loading_msg" style="color: #FFFFFF">Downloading WASM (could take a while)...</p>
 	<canvas id="app"></canvas>
 	<script src="log_sim_gui_web.js" type="text/javascript"></script>
 	<script>
-		wasm_bindgen("./log_sim_gui_web_bg.wasm").then(on_wasm_loaded).catch(console.error);
+		wasm_bindgen("./log_sim_gui_web_bg.wasm").then(on_wasm_loaded).catch(on_wasm_err);
+		function on_wasm_err(err) {
+			console.error(err);
+			document.getElementById("loading_msg").innerHTML = "Failed to download WASM";
+		}
 		function on_wasm_loaded() {
+			document.getElementById("loading_msg").remove();
 			wasm_bindgen.main_web("app");
 		}
 	</script>
