@@ -11,7 +11,7 @@
 			touch-action: manipulation;
 		}
 		body {
-			background: #404040
+			background: #000000
 		}
 		html,
 		body {
@@ -28,20 +28,49 @@
 			position: absolute;
 			tranform: translate(-50%, 0%);
 		}
+		#loading_msg {
+			color: #FFFFFF;
+			font-size: x-large;
+			text-align: center;
+		}
 	</style>
 </head>
 <body>
-	<p id="loading_msg" style="color: #FFFFFF">Downloading WASM (could take a while)...</p>
+	<p id="loading_msg"></p>
 	<canvas id="app"></canvas>
 	<script src="log_sim_gui_web.js" type="text/javascript"></script>
 	<script>
+		const LOADING_MSG = "Downloading WASM";
+		const LOADING_ERR_MSG = "Failed to download WASM (try Shift + Ctrl(⌘) + R)";
+		const states = ["...", "..", ".", "", ".", ".."];
+		var state_index = 0;
+		
+		function update_loading_msg() {
+			const element = document.getElementById("loading_msg");
+			element.innerHTML = LOADING_MSG + states[state_index];
+			
+			state_index += 1;
+			if(state_index >= states.length) {
+				state_index = 0;
+			}
+		}
+		const loading_timer_id = setInterval(update_loading_msg, 500);
+		
+		function stop_loading(remove) {
+			clearInterval(loading_timer_id);
+			if(remove) { document.getElementById("loading_msg").remove(); }
+		}
+		
+		update_loading_msg();
+		
 		wasm_bindgen("./log_sim_gui_web_bg.wasm").then(on_wasm_loaded).catch(on_wasm_err);
 		function on_wasm_err(err) {
+			stop_loading(false);
 			console.error(err);
-			document.getElementById("loading_msg").innerHTML = "Failed to download WASM";
+			document.getElementById("loading_msg").innerHTML = LOADING_ERR_MSG;
 		}
 		function on_wasm_loaded() {
-			document.getElementById("loading_msg").remove();
+			stop_loading(true);
 			wasm_bindgen.main_web("app");
 		}
 	</script>
