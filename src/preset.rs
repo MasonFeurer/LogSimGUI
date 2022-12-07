@@ -44,7 +44,7 @@ impl CombGatePreset {
 
             // execute queued writes
             let mut total_updates = 0;
-            while scene.write_queue.0.len() > 0 {
+            while scene.write_queue.len() > 0 {
                 total_updates += 1;
                 scene.update();
                 if total_updates > 1000 {

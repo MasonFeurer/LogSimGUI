@@ -1,6 +1,7 @@
 #![feature(let_chains)]
 
 pub mod app;
+pub mod dev;
 pub mod graphics;
 pub mod integration;
 pub mod preset;
@@ -51,63 +52,28 @@ pub enum NewLink<T> {
     DeviceOutputTo(T, usize, LinkTarget<T>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct BitField {
     pub data: u64,
     len: usize,
 }
 impl BitField {
-    #[inline(always)]
-    pub fn single(bit: u8) -> Self {
-        assert!(bit == 0 || bit == 1);
-        Self {
-            len: 1,
-            data: bit as u64,
-        }
-    }
-    #[inline(always)]
-    pub fn empty(len: usize) -> Self {
+    pub const fn empty(len: usize) -> Self {
         assert!(len <= 32);
         Self { len, data: 0 }
     }
-    pub fn from_bits(bits: &[u8]) -> Self {
-        assert!(bits.len() <= 32);
-        let mut data = 0;
-        for i in 0..bits.len() {
-            data |= (bits[i] as u64) << i;
-        }
-        Self {
-            len: bits.len(),
-            data,
-        }
-    }
 
-    #[inline(always)]
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
+    // NOTE: hot code!
     #[inline(always)]
     pub fn set(&mut self, pos: usize, state: bool) {
-        assert!(pos < self.len);
+        debug_assert!(pos < self.len);
         self.data = (self.data & !(1 << pos as u64)) | ((state as u64) << pos);
     }
+    // NOTE: hot code!
     #[inline(always)]
     pub fn get(&self, pos: usize) -> bool {
-        assert!(pos < self.len);
+        debug_assert!(pos < self.len);
         ((self.data >> pos as u64) & 1) == 1
-    }
-    #[inline(always)]
-    pub fn any_on(&self) -> bool {
-        self.data.count_ones() > 0
-    }
-
-    pub fn bits(self) -> Vec<bool> {
-        let mut bits = Vec::with_capacity(self.len);
-        for i in 0..self.len {
-            bits.push(self.get(i));
-        }
-        bits
     }
 }
 
@@ -118,6 +84,7 @@ pub struct TruthTable {
     pub map: Vec<u64>,
 }
 impl TruthTable {
+    // NOTE: hot code!
     #[inline(always)]
     pub fn get(&self, input: usize) -> BitField {
         BitField {
@@ -126,8 +93,9 @@ impl TruthTable {
         }
     }
 }
-impl std::fmt::Debug for TruthTable {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+use std::fmt;
+impl fmt::Debug for TruthTable {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut f = f.debug_struct("TruthTable");
         let mut input = 0;
         for output in &self.map {
@@ -139,4 +107,50 @@ impl std::fmt::Debug for TruthTable {
         }
         f.finish()
     }
+}
+
+pub struct ChangedOutputs {
+    prev_output: u64,
+    new_output: u64,
+    len: usize,
+    index: usize,
+}
+impl ChangedOutputs {
+    #[inline(always)]
+    pub const fn new(prev: BitField, new: BitField) -> Self {
+        debug_assert!(prev.len == new.len);
+        Self {
+            prev_output: prev.data,
+            new_output: new.data,
+            len: prev.len,
+            index: 0,
+        }
+    }
+    #[inline(always)]
+    pub const fn none() -> Self {
+        Self {
+            prev_output: 0,
+            new_output: 0,
+            len: 0,
+            index: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub fn next(&mut self) -> Option<(usize, bool)> {
+        while self.index < self.len {
+            let idx = self.index;
+            let prev_bit = (self.prev_output >> idx as u64) & 1;
+            let new_bit = (self.new_output >> idx as u64) & 1;
+            self.index += 1;
+            if prev_bit != new_bit {
+                return Some((idx, new_bit == 1));
+            }
+        }
+        None
+    }
+}
+pub struct ChangedOutput {
+    pub output: usize,
+    pub state: bool,
 }

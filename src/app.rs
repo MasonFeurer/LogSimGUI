@@ -1,3 +1,4 @@
+use crate::dev::DevOptions;
 use crate::graphics::{Graphics, View};
 use crate::integration::{FrameInput, FrameOutput, Keybind};
 use crate::preset::*;
@@ -42,6 +43,7 @@ pub enum AppItem {
     EditPopup,
     Other,
     PresetPlacer,
+    DevOptions,
 }
 impl Default for AppItem {
     fn default() -> Self {
@@ -57,7 +59,7 @@ impl AppItem {
             Self::SceneItem(_) => 2,
             Self::EditPopup => 3,
             Self::Other => 4,
-            Self::PresetPlacer => 5,
+            Self::PresetPlacer | Self::DevOptions => 5,
         }
     }
 
@@ -82,6 +84,7 @@ pub struct App {
     pub settings: Settings,
     pub presets: Presets,
     pub scene: Scene,
+    pub dev_options: DevOptions,
 
     view: View,
     paused: bool,
@@ -94,9 +97,9 @@ pub struct App {
     /// What preset we've selected in the presets menu
     presets_menu_sel: Option<String>,
     /// If we right click on some scene item, shows a popup
-    edit_popup: Option<SceneItem>,
+    pub edit_popup: Option<SceneItem>,
     /// If we started creating some links
-    link_starts: Vec<LinkStart<u64>>,
+    pub link_starts: Vec<LinkStart<u64>>,
     /// The config for creating a new preset from the scene
     create_preset: CreatePreset,
     /// If there was an error creating a preset
@@ -104,9 +107,9 @@ pub struct App {
     /// The small window for searching and placing presets
     preset_placer: PresetPlacer,
     /// A list of the presets we've picked from the preset placer
-    held_presets: Vec<String>,
+    pub held_presets: Vec<String>,
     /// If we've selected multiple devices for bulk actions
-    selected_devices: Vec<u64>,
+    pub selected_devices: Vec<u64>,
     /// If true, we should automatically start/finish a link when we hover the pin
     auto_link: bool,
 
@@ -121,6 +124,7 @@ impl App {
             settings: create.settings,
             presets: create.presets,
             scene: create.scene,
+            dev_options: DevOptions::default(),
 
             view: View::default(),
             paused: false,
@@ -256,6 +260,13 @@ impl App {
         let s = &mut self.settings;
 
         ui.heading("App");
+        ui.horizontal(|ui| {
+            ui.add_space(SPACE);
+            ui.label(format!(
+                "version: {}.{}.{}",
+                s.version[0], s.version[1], s.version[2],
+            ))
+        });
         checkbox(ui, "dark mode: ", &mut s.dark_mode);
         checkbox(ui, "high contrast: ", &mut s.high_contrast);
         ui.horizontal(|ui| {
@@ -329,7 +340,7 @@ impl App {
 
             let [mut load, mut delete, mut place] = [false; 3];
             ui.horizontal(|ui| {
-                if self.settings.dev_options {
+                if self.dev_options.enabled {
                     if ui.button("debug").clicked() {
                         println!("{:#?}", preset);
                     }
@@ -560,6 +571,10 @@ impl App {
         if let Some(preset) = rs.picked {
             self.held_presets.push(preset);
         }
+        if self.dev_options.enabled {
+            DevOptions::show(ui, input, output, self);
+        }
+        self.dev_options.input(input);
     }
 
     pub fn show_edit_popup(&mut self, ui: &mut Ui, input: &FrameInput) -> Option<bool> {
@@ -721,6 +736,7 @@ impl App {
             &self.scene,
             &mut dead_links,
             output_link_err,
+            self.dev_options.show_device_ids(),
         );
 
         // --- Remove the dead links ---
@@ -874,21 +890,6 @@ impl App {
         }
     }
 
-    pub fn misc_debug(&mut self, ui: &mut Ui, input: &FrameInput) {
-        ui.label(format!("hovered: {:?}", input.prev_hovered));
-        ui.label(format!("selected: {:?}", self.selected_devices));
-        ui.label("write queue: ");
-        for write in &self.scene.write_queue.0 {
-            ui.horizontal(|ui| {
-                ui.add_space(15.0);
-                ui.label(format!(
-                    "{} - {:?} = {}",
-                    write.delay, write.target, write.state
-                ));
-            });
-        }
-    }
-
     pub fn clone_selected_devices(&mut self, pointer_pos: Pos2) {
         let mut selection_min = Pos2::new(f32::INFINITY, f32::INFINITY);
         let mut devices = Vec::with_capacity(self.selected_devices.len());
@@ -930,9 +931,6 @@ impl App {
         ctx.set_visuals(self.settings.visuals());
         TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| self.top_panel(ui, &mut output));
-            if self.settings.dev_options {
-                self.misc_debug(ui, &input);
-            }
         });
         TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
             ui.horizontal(|ui| self.bottom_panel(ui));
@@ -964,6 +962,9 @@ impl App {
                 }
                 AppItem::PresetPlacer => {
                     self.settings.preset_placer_pos += delta;
+                }
+                AppItem::DevOptions => {
+                    self.dev_options.pos += delta;
                 }
                 AppItem::SceneItem(SceneItem::InputBulb(id)) => {
                     self.scene.drag_input(id, delta * self.view.inv_scale());
@@ -1062,7 +1063,7 @@ impl App {
                 });
             }
 
-            if self.settings.dev_options {
+            if self.dev_options.enabled {
                 if ui.button("debug").clicked() {
                     println!("{:#?}", self.scene);
                 }

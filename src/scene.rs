@@ -5,7 +5,7 @@ use crate::settings::Settings;
 use crate::*;
 use egui::Color32;
 use hashbrown::HashMap;
-use tinyrand::RandRange;
+use tinyrand::{RandRange, Seeded, StdRand};
 
 pub use chip::Chip;
 
@@ -31,53 +31,110 @@ pub struct Write<T> {
     pub delay: u8,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WriteQueue<T>(pub Vec<Write<T>>);
-impl<T: Clone + PartialEq> WriteQueue<T> {
-    #[inline(always)]
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
+pub struct WriteQueue<T> {
+    pub writes: Vec<Write<T>>,
+    pub buffer: Vec<(LinkTarget<T>, bool)>,
+    pub rand: StdRand,
+}
 
-    pub fn push(&mut self, target: LinkTarget<T>, state: bool) {
-        // If there is already a queued write to the same target, this write must eventually execute after it,
-        // by making sure it's delay is greater than the already queued event.
-        let mut rand = crate::RAND.lock().unwrap();
-        for write in &mut self.0 {
-            if write.target == target {
-                write.delay += rand.next_range(0u64..3) as u8;
-                write.state = state;
-                return;
-            }
-        }
-        self.0.push(Write {
-            target,
-            state,
-            delay: rand.next_range(0u64..3) as u8,
-        });
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+impl<T: Serialize + Clone + PartialEq> Serialize for WriteQueue<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Serialize::serialize(&self.writes, serializer)
     }
-
-    pub fn update(&mut self, ready: &mut Vec<Write<T>>) {
-        let mut keep = Vec::with_capacity(self.0.len());
-        for write in &self.0 {
-            if write.delay == 0 {
-                ready.push(write.clone());
-            } else {
-                keep.push(Write {
-                    delay: write.delay - 1,
-                    target: write.target.clone(),
-                    state: write.state,
-                });
-            }
-        }
-        self.0 = keep;
+}
+impl<'de, T: Deserialize<'de> + Clone + PartialEq> Deserialize<'de> for WriteQueue<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let writes: Vec<Write<T>> = Deserialize::deserialize(deserializer)?;
+        Ok(Self::new(writes))
+    }
+}
+impl<T: std::fmt::Debug> std::fmt::Debug for WriteQueue<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.writes, f)
+    }
+}
+impl<T: Clone> Clone for WriteQueue<T> {
+    fn clone(&self) -> Self {
+        Self::new(self.writes.clone())
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SetOutput {
-    pub output: usize,
-    pub state: bool,
+impl<T> WriteQueue<T> {
+    pub fn new(writes: Vec<Write<T>>) -> Self {
+        Self {
+            writes,
+            buffer: Vec::new(),
+            rand: StdRand::seed(727841),
+        }
+    }
+    pub fn empty() -> Self {
+        Self::new(vec![])
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.writes.len()
+    }
+}
+impl<T: PartialEq> WriteQueue<T> {
+    // note: HOT CODE!
+    #[inline(always)]
+    pub fn push(&mut self, target: LinkTarget<T>, state: bool) {
+        // If there is already a queued write to the same target,
+        // this write must eventually execute after it,
+        // by making sure it's delay is greater than the already queued event.
+        let new_delay = self.rand.next_range(0u64..2) as u8;
+
+        // TODO try to remove the loop
+        for write in &mut self.writes {
+            if write.target == target {
+                write.state = state;
+                write.delay += new_delay;
+                // A target should only ever have up to 1 write targeting it, so returning is fine.
+                return;
+            }
+        }
+        self.writes.push(Write {
+            target,
+            state,
+            delay: new_delay,
+        });
+    }
+
+    #[inline(always)]
+    pub fn push_buffer(&mut self, target: LinkTarget<T>, state: bool) {
+        self.buffer.push((target, state));
+    }
+
+    #[inline(always)]
+    pub fn store_buffer(&mut self) {
+        for idx in 0..self.buffer.len() {
+            let (target, state) = self.buffer[idx].clone();
+            self.push(target, state);
+        }
+        self.buffer.clear();
+    }
+
+    // note: HOT CODE!
+    #[inline(always)]
+    pub fn next(&mut self) -> Option<Write<T>> {
+        let mut result = None;
+        for idx in 0..self.writes.len() {
+            let write = &mut self.writes[idx];
+            if write.delay == 0 {
+                result = Some(idx);
+            } else {
+                write.delay -= 1;
+            }
+        }
+        if let Some(idx) = result {
+            let result = Some(self.writes[idx].clone());
+            self.writes.remove(idx);
+            return result;
+        }
+        None
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -98,24 +155,12 @@ impl CombGate {
         }
     }
 
-    pub fn set_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
+    pub fn set_input(&mut self, input: usize, state: bool) -> ChangedOutputs {
         self.input.set(input, state);
         let result = self.table.get(self.input.data as usize);
-
-        if result == self.output {
-            return;
-        }
-
-        for i in 0..self.output.len() {
-            if self.output.get(i) == result.get(i) {
-                continue;
-            }
-            set_outputs.push(SetOutput {
-                output: i,
-                state: result.get(i),
-            });
-        }
+        let prev_output = self.output;
         self.output = result;
+        ChangedOutputs::new(prev_output, result)
     }
 }
 
@@ -132,10 +177,13 @@ impl DeviceData {
         }
     }
 
-    pub fn set_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
+    pub fn set_input(&mut self, input: usize, state: bool) -> ChangedOutputs {
         match self {
-            Self::CombGate(e) => e.set_input(input, state, set_outputs),
-            Self::Chip(e) => e.set_input(input, state, set_outputs),
+            Self::CombGate(e) => e.set_input(input, state),
+            Self::Chip(e) => {
+                e.set_input(input, state);
+                ChangedOutputs::none()
+            }
         }
     }
 
@@ -228,7 +276,7 @@ impl Output {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Scene {
     pub rect: Rect,
     pub write_queue: WriteQueue<u64>,
@@ -244,7 +292,7 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             rect: Rect::from_min_max(Pos2::ZERO, Pos2::ZERO),
-            write_queue: WriteQueue::new(),
+            write_queue: WriteQueue::empty(),
 
             inputs: HashMap::new(),
             outputs: HashMap::new(),
@@ -256,19 +304,15 @@ impl Scene {
     }
 
     pub fn update(&mut self) {
-        let mut ready_writes = Vec::new();
-        self.write_queue.update(&mut ready_writes);
-        for write in ready_writes {
+        while let Some(write) = self.write_queue.next() {
             match write.target {
                 LinkTarget::DeviceInput(device, input) => {
                     let Some(device) = self.devices.get_mut(&device) else { return };
-                    let mut set_outputs = Vec::new();
 
-                    device.data.set_input(input, write.state, &mut set_outputs);
-
-                    for SetOutput { output, state } in set_outputs {
-                        for target in &device.links[output] {
-                            self.write_queue.push(target.clone(), state);
+                    let mut changed_outputs = device.data.set_input(input, write.state);
+                    while let Some((output, state)) = changed_outputs.next() {
+                        for target in device.links[output].clone() {
+                            self.write_queue.push_buffer(target, state);
                         }
                     }
                 }
@@ -279,53 +323,18 @@ impl Scene {
             }
         }
 
-        // executed the writes for the scene, but contained chips may have queued writes
+        // Update the chips on scene
         for (_, device) in &mut self.devices {
             let DeviceData::Chip(chip) = &mut device.data else { continue };
 
-            let mut set_outputs = Vec::new();
-            chip.update(&mut set_outputs);
-
-            for SetOutput { output, state } in set_outputs {
-                for target in &device.links[output] {
-                    self.write_queue.push(target.clone(), state);
+            let mut changed_outputs = chip.update();
+            while let Some((output, state)) = changed_outputs.next() {
+                for target in device.links[output].clone() {
+                    self.write_queue.push_buffer(target, state);
                 }
             }
         }
-    }
-
-    pub fn group_value(group: &Group, states: &[bool]) -> String {
-        let mut value: i64 = 0;
-        let mut bit_value: i64 = 1;
-        let mut last_idx = 0;
-
-        if group.lsb_top {
-            for idx in 0..group.members.len() - 1 {
-                if states[idx] {
-                    value += bit_value;
-                }
-                bit_value *= 2;
-            }
-            last_idx = group.members.len() - 1;
-        } else {
-            for idx in (1..group.members.len()).rev() {
-                if states[idx] {
-                    value += bit_value;
-                }
-                bit_value *= 2;
-            }
-        }
-        if states[last_idx] {
-            if group.signed {
-                bit_value *= -1;
-            }
-            value += bit_value;
-        }
-        if group.hex {
-            format!("{:X}", value)
-        } else {
-            format!("{}", value)
-        }
+        self.write_queue.store_buffer();
     }
 
     pub fn inputs_sorted(&self) -> Vec<u64> {
@@ -358,7 +367,7 @@ impl Scene {
 
     pub fn del_device(&mut self, id: u64) {
         let device = self.devices.get(&id).unwrap();
-        for output_idx in 0..device.data.output().len() {
+        for output_idx in 0..device.data.output().len {
             if device.data.output().get(output_idx) == false {
                 continue;
             }
@@ -371,12 +380,10 @@ impl Scene {
 
     pub fn set_device_input(&mut self, id: u64, input: usize, state: bool) {
         let Some(device) = self.devices.get_mut(&id) else { return };
-        let mut set_outputs = Vec::new();
 
-        device.data.set_input(input, state, &mut set_outputs);
-
-        for SetOutput { output, state } in set_outputs {
-            for target in &device.links[output] {
+        let mut changed_outputs = device.data.set_input(input, state);
+        while let Some((output, state)) = changed_outputs.next() {
+            for target in device.links[output].clone() {
                 self.write_queue.push(target.clone(), state);
             }
         }
@@ -688,5 +695,38 @@ impl Group {
             .get(self.members.last().unwrap())
             .unwrap()
             .y_pos
+    }
+}
+pub fn group_value(group: &Group, states: &[bool]) -> String {
+    let mut value: i64 = 0;
+    let mut bit_value: i64 = 1;
+    let mut last_idx = 0;
+
+    if group.lsb_top {
+        for idx in 0..group.members.len() - 1 {
+            if states[idx] {
+                value += bit_value;
+            }
+            bit_value *= 2;
+        }
+        last_idx = group.members.len() - 1;
+    } else {
+        for idx in (1..group.members.len()).rev() {
+            if states[idx] {
+                value += bit_value;
+            }
+            bit_value *= 2;
+        }
+    }
+    if states[last_idx] {
+        if group.signed {
+            bit_value *= -1;
+        }
+        value += bit_value;
+    }
+    if group.hex {
+        format!("{:X}", value)
+    } else {
+        format!("{}", value)
     }
 }

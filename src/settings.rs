@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 pub struct Settings {
     // App
+    pub version: [u8; 3],
     pub dark_mode: bool,
     pub high_contrast: bool,
-    pub dev_options: bool,
     pub preset_placer_pos: Pos2,
 
     // Scene IO
@@ -27,9 +27,9 @@ impl Settings {
     pub fn default() -> Self {
         Self {
             // App
+            version: [22, 12, 07],
             dark_mode: true,
             high_contrast: true,
-            dev_options: false,
             preset_placer_pos: Pos2::new(100.0, 100.0),
             pin_color: [Color32::from_gray(100), Color32::from_rgb(255, 0, 0)],
 

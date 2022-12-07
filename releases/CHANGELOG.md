@@ -69,3 +69,8 @@
 
 - Saving/loading presets no longer uses the `__index.ron` file
 - Improved error messages for loading invalid settings, presets, or scene
+
+## Latest (On GitHub)
+- Improved simulation performance
+- Added "version" setting
+- Removed "dev_options" setting

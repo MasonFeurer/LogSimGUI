@@ -1,5 +1,5 @@
 use crate::preset::DevicePreset;
-use crate::scene::{Device, Group, Scene, SceneItem};
+use crate::scene::{group_value, Device, Group, Scene, SceneItem};
 use crate::settings::Settings;
 use crate::*;
 use egui::*;
@@ -356,7 +356,7 @@ pub fn show_group_header(
     center: f32,
     top: f32,
 ) -> bool {
-    let text = Scene::group_value(group, states);
+    let text = group_value(group, states);
     let size = GROUP_HEADER_SIZE;
     let rect = Rect::from_min_size(Pos2::new(center - col_w * 0.5, top), Vec2::new(col_w, size));
     let hovered = g.rect(
@@ -426,8 +426,8 @@ pub fn show_device(
     g: &mut Graphics,
     s: &Settings,
     view: &View,
-    id: u64,
     device: &scene::Device,
+    show_id: Option<u64>,
 ) -> Option<DeviceItem> {
     let pos = device_pos(device, view);
     let size = device_size(device, s, view);
@@ -479,8 +479,8 @@ pub fn show_device(
         }
     }
 
-    // --- Show ID in dev mode ---
-    if s.dev_options {
+    // --- Show ID ---
+    if let Some(id) = show_id {
         g.text(
             pos + Vec2::new(size.x * 0.5, -10.0),
             10.0,
@@ -510,13 +510,15 @@ pub fn show_scene(
     scene: &scene::Scene,
     dead_links: &mut Vec<(LinkStart<u64>, usize)>,
     output_link_err: bool,
+    show_device_ids: bool,
 ) -> Option<SceneItem> {
     let mut result: Option<SceneItem> = None;
     let rect = scene.rect;
 
     // --- Show devices ---
     for (device_id, device) in &scene.devices {
-        let device_rs = show_device(g, s, view, *device_id, device);
+        let show_id = show_device_ids.then(|| *device_id);
+        let device_rs = show_device(g, s, view, device, show_id);
 
         if let Some(device_item) = device_rs {
             let scene_item = match device_item {

@@ -1,6 +1,6 @@
-use super::{CombGate, SetOutput, WriteQueue};
+use super::{CombGate, WriteQueue};
 use crate::preset::ChipPreset;
-use crate::{BitField, DeviceInput, LinkTarget};
+use crate::{BitField, ChangedOutput, ChangedOutputs, DeviceInput, LinkTarget};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +23,7 @@ impl Chip {
         let output = BitField::empty(preset.outputs.len());
         let input_links = preset.input_links.clone();
 
-        let mut write_queue = WriteQueue::new();
+        let mut write_queue = WriteQueue::empty();
         let mut devices = Vec::new();
 
         for comb_gate in &preset.comb_gates {
@@ -61,49 +61,46 @@ impl Chip {
         }
     }
 
-    pub fn set_link_target(
-        &mut self,
-        target: LinkTarget<usize>,
-        state: bool,
-        set_outputs: &mut Vec<SetOutput>,
-    ) {
-        // `set_outputs`: outputs of *this chip* that were set by this link
-        match target {
-            LinkTarget::Output(output) => {
-                set_outputs.push(SetOutput { output, state });
-                self.output.set(output, state);
-            }
-            LinkTarget::DeviceInput(device, input) => {
-                let device = &mut self.devices[device];
-
-                // these `new_set_outputs` are not outputs of this chip
-                // so they are not pushed to `set_outputs`.
-                // they are instead stored as writes, to be handled next update
-                let mut new_set_outputs = Vec::new();
-                device.data.set_input(input, state, &mut new_set_outputs);
-
-                for SetOutput { output, state } in new_set_outputs {
-                    for target in device.links[output].clone() {
-                        self.write_queue.push(target, state);
-                    }
-                }
-            }
+    pub fn update(&mut self) -> ChangedOutputs {
+        let prev_output = self.output;
+        while let Some(write) = self.write_queue.next() {
+            self.set_link_target(write.target, write.state);
         }
+        self.write_queue.store_buffer();
+        ChangedOutputs::new(prev_output, self.output)
     }
 
-    pub fn set_input(&mut self, input: usize, state: bool, set_outputs: &mut Vec<SetOutput>) {
+    pub fn set_input(&mut self, input: usize, state: bool) {
         self.input.set(input, state);
 
-        for link in self.input_links[input].clone() {
-            self.set_link_target(link.wrap(), state, set_outputs);
+        for DeviceInput(device, input) in self.input_links[input].clone() {
+            self.set_device_input(device, input, state);
         }
     }
 
-    pub fn update(&mut self, set_outputs: &mut Vec<SetOutput>) {
-        let mut ready_writes = Vec::new();
-        self.write_queue.update(&mut ready_writes);
-        for write in ready_writes {
-            self.set_link_target(write.target, write.state, set_outputs);
+    #[inline(always)]
+    fn set_link_target(&mut self, target: LinkTarget<usize>, state: bool) -> Option<ChangedOutput> {
+        match target {
+            LinkTarget::Output(output) => {
+                self.output.set(output, state);
+                Some(ChangedOutput { output, state })
+            }
+            LinkTarget::DeviceInput(device, input) => {
+                self.set_device_input(device, input, state);
+                None
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn set_device_input(&mut self, device: usize, input: usize, state: bool) {
+        let device = &mut self.devices[device];
+
+        let mut changed_outputs = device.data.set_input(input, state);
+        while let Some((output, state)) = changed_outputs.next() {
+            for target in device.links[output].clone() {
+                self.write_queue.push_buffer(target, state);
+            }
         }
     }
 }
