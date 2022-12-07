@@ -42,15 +42,15 @@
 	<script>
 		const LOADING_MSG = "Downloading WASM";
 		const LOADING_ERR_MSG = "Failed to download WASM (try Shift + Ctrl(⌘) + R)";
-		const states = ["...", "..", ".", "", ".", ".."];
+		const LOADING_STATES = ["...", "..", ".", "", ".", ".."];
 		var state_index = 0;
 		
 		function update_loading_msg() {
 			const element = document.getElementById("loading_msg");
-			element.innerHTML = LOADING_MSG + states[state_index];
+			element.innerHTML = LOADING_MSG + LOADING_STATES[state_index];
 			
 			state_index += 1;
-			if(state_index >= states.length) {
+			if(state_index >= LOADING_STATES.length) {
 				state_index = 0;
 			}
 		}
