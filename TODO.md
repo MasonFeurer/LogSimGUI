@@ -1,7 +1,6 @@
-
- - "zoom to fit" : zoom out until all chips are visible
- - add clock device
- - add bus device
- - allow for links to be created with anchor points (maybe without changing save format of Scene?)
- - Share code for (stacking, groups, etc) for inputs/outputs
-
+- Add clock device
+- Add bus device
+- Allow for links to be created with anchor points (maybe without changing save format of Scene?)
+- Make a tutorial
+- BEFORE NEXT RELEASE: Add code for loading the old presets and updating them to the new data layout
+- BUG: The RNG for scene Ids should have a random Id at creation

@@ -77,7 +77,7 @@ impl<T> WriteQueue<T> {
         self.writes.len()
     }
 }
-impl<T: PartialEq> WriteQueue<T> {
+impl<T: PartialEq + Clone> WriteQueue<T> {
     // note: HOT CODE!
     #[inline(always)]
     pub fn push(&mut self, target: LinkTarget<T>, state: bool) {
@@ -91,7 +91,8 @@ impl<T: PartialEq> WriteQueue<T> {
             if write.target == target {
                 write.state = state;
                 write.delay += new_delay;
-                // A target should only ever have up to 1 write targeting it, so returning is fine.
+                // A target should only ever have up to 1 write targeting it,
+                // so returning is fine.
                 return;
             }
         }
@@ -238,41 +239,51 @@ impl Device {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum IoSel {
+    Input,
+    Output,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Input {
+pub struct Io {
     pub name: String,
     pub y_pos: f32,
     pub state: bool,
-    pub links: Vec<DeviceInput<u64>>,
     pub group_member: Option<u64>,
 }
-impl Input {
+impl Io {
     pub fn new(y_pos: f32) -> Self {
         Self {
             name: String::new(),
             y_pos,
             state: false,
-            links: Vec::new(),
             group_member: None,
         }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Input {
+    pub io: Io,
+    pub links: Vec<DeviceInput<u64>>,
+}
+impl Input {
+    pub fn new(io: Io) -> Self {
+        Self {
+            io,
+            links: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Output {
-    pub name: String,
-    pub y_pos: f32,
-    pub state: bool,
-    pub group_member: Option<u64>,
+    pub io: Io,
 }
 impl Output {
-    pub fn new(y_pos: f32) -> Self {
-        Self {
-            name: String::new(),
-            y_pos,
-            state: false,
-            group_member: None,
-        }
+    pub fn new(io: Io) -> Self {
+        Self { io }
     }
 }
 
@@ -318,7 +329,7 @@ impl Scene {
                 }
                 LinkTarget::Output(output) => {
                     let Some(output) = self.outputs.get_mut(&output) else { return };
-                    output.state = write.state;
+                    output.io.state = write.state;
                 }
             }
         }
@@ -336,25 +347,6 @@ impl Scene {
         }
         self.write_queue.store_buffer();
     }
-
-    pub fn inputs_sorted(&self) -> Vec<u64> {
-        let mut keys: Vec<_> = self.inputs.keys().cloned().collect();
-        keys.sort_by(|a, b| {
-            let a_y = self.inputs.get(a).unwrap().y_pos;
-            let b_y = self.inputs.get(b).unwrap().y_pos;
-            a_y.partial_cmp(&b_y).unwrap()
-        });
-        keys
-    }
-    pub fn outputs_sorted(&self) -> Vec<u64> {
-        let mut keys: Vec<_> = self.outputs.keys().cloned().collect();
-        keys.sort_by(|a, b| {
-            let a_y = self.outputs.get(a).unwrap().y_pos;
-            let b_y = self.outputs.get(b).unwrap().y_pos;
-            a_y.partial_cmp(&b_y).unwrap()
-        });
-        keys
-    }
 }
 impl Scene {
     pub fn add_device(&mut self, id: u64, device: Device) {
@@ -365,14 +357,14 @@ impl Scene {
         self.devices.get_mut(&id).unwrap().pos += drag;
     }
 
-    pub fn del_device(&mut self, id: u64) {
+    pub fn remove_device(&mut self, id: u64) {
         let device = self.devices.get(&id).unwrap();
         for output_idx in 0..device.data.output().len {
             if device.data.output().get(output_idx) == false {
                 continue;
             }
-            for link in &device.links[output_idx] {
-                self.write_queue.push(link.clone(), false);
+            for target in &device.links[output_idx] {
+                self.write_queue.push(target.clone(), false);
             }
         }
         self.devices.remove(&id).unwrap();
@@ -399,207 +391,235 @@ impl Scene {
     }
 }
 impl Scene {
+    fn get_io(&self, sel: IoSel, id: u64) -> Option<&Io> {
+        match sel {
+            IoSel::Input => self.inputs.get(&id).map(|i| &i.io),
+            IoSel::Output => self.outputs.get(&id).map(|o| &o.io),
+        }
+    }
+    fn mut_io(&mut self, sel: IoSel, id: u64) -> Option<&mut Io> {
+        match sel {
+            IoSel::Input => self.inputs.get_mut(&id).map(|i| &mut i.io),
+            IoSel::Output => self.outputs.get_mut(&id).map(|o| &mut o.io),
+        }
+    }
+    fn add_io(&mut self, sel: IoSel, id: u64, io: Io) {
+        match sel {
+            IoSel::Input => {
+                self.inputs.insert(id, Input::new(io));
+            }
+            IoSel::Output => {
+                self.outputs.insert(id, Output::new(io));
+            }
+        }
+    }
+    fn remove_io_alone(&mut self, sel: IoSel, id: u64) {
+        match sel {
+            IoSel::Input => {
+                self.inputs.remove(&id).unwrap();
+            }
+            IoSel::Output => {
+                self.outputs.remove(&id).unwrap();
+            }
+        };
+    }
+
+    fn get_io_group(&self, sel: IoSel, id: u64) -> Option<&Group> {
+        match sel {
+            IoSel::Input => self.input_groups.get(&id),
+            IoSel::Output => self.output_groups.get(&id),
+        }
+    }
+    fn mut_io_group(&mut self, sel: IoSel, id: u64) -> Option<&mut Group> {
+        match sel {
+            IoSel::Input => self.input_groups.get_mut(&id),
+            IoSel::Output => self.output_groups.get_mut(&id),
+        }
+    }
+    fn insert_io_group(&mut self, sel: IoSel, id: u64, group: Group) {
+        match sel {
+            IoSel::Input => self.input_groups.insert(id, group),
+            IoSel::Output => self.output_groups.insert(id, group),
+        };
+    }
+    fn remove_io_group(&mut self, sel: IoSel, id: u64) {
+        match sel {
+            IoSel::Input => {
+                self.input_groups.remove(&id);
+            }
+            IoSel::Output => {
+                self.output_groups.remove(&id);
+            }
+        };
+    }
+
+    pub fn drag_io(&mut self, sel: IoSel, id: u64, drag: Vec2) {
+        let io = self.mut_io(sel, id).unwrap();
+        if let Some(group_id) = io.group_member {
+            let group = self.get_io_group(sel, group_id).unwrap();
+            for member_id in group.members.clone() {
+                self.mut_io(sel, member_id).unwrap().y_pos += drag.y;
+            }
+        } else {
+            io.y_pos += drag.y;
+        }
+    }
+    pub fn remove_io(&mut self, sel: IoSel, id: u64) {
+        let group_member = self.get_io(sel, id).unwrap().group_member;
+        let Some(group_id) = group_member else {
+        	self.remove_io_alone(sel, id);
+        	return;
+        };
+        let members = self.get_io_group(sel, group_id).unwrap().members.clone();
+        for member_id in members {
+            self.remove_io_alone(sel, member_id);
+        }
+        self.remove_io_group(sel, group_id);
+    }
+    pub fn stack_io(&mut self, sel: IoSel, id: u64, settings: &Settings) {
+        let io = self.get_io(sel, id).unwrap();
+        let state = io.state;
+        let name = io.name.clone();
+        let y_pos = io.y_pos;
+
+        fn new_name(name: &str, i: usize) -> String {
+            if name.trim().is_empty() {
+                return String::new();
+            }
+            format!("{}{}", name, i)
+        }
+
+        let sp = settings.scene_pin_col_w;
+        if let Some(group_id) = io.group_member {
+            let group = self.get_io_group(sel, group_id).unwrap();
+            let first_member = self.get_io(sel, group.members[0]).unwrap();
+            let new_name = new_name(&first_member.name, group.members.len());
+            let bottom_y = group.bottom_y(sel, self);
+
+            let group = self.mut_io_group(sel, group_id).unwrap();
+            let new_id = rand_id();
+            group.members.push(new_id);
+
+            let io = Io {
+                y_pos: bottom_y + sp,
+                group_member: Some(group_id),
+                name: new_name,
+                state,
+            };
+            self.add_io(sel, new_id, io);
+        } else {
+            let group_id = rand_id();
+            let new_id = rand_id();
+            self.insert_io_group(sel, group_id, Group::new(vec![id, new_id]));
+            self.mut_io(sel, id).unwrap().group_member = Some(group_id);
+
+            let io = Io {
+                y_pos: y_pos + sp,
+                group_member: Some(group_id),
+                name: new_name(&name, 1),
+                state,
+            };
+            self.add_io(sel, new_id, io);
+        }
+    }
+    pub fn unstack_io(&mut self, sel: IoSel, id: u64) {
+        let Some(group_id) = self.get_io(sel, id).unwrap().group_member else {
+        	return
+        };
+        let group = self.mut_io_group(sel, group_id).unwrap();
+        let member = group.members.pop().unwrap();
+
+        if group.members.len() == 1 {
+            let last_member = group.members[0];
+            self.remove_io_group(sel, group_id);
+            self.mut_io(sel, id).unwrap().group_member = None;
+            self.mut_io(sel, last_member).unwrap().group_member = None;
+        }
+        self.remove_io_alone(sel, member);
+    }
+
     pub fn add_input(&mut self, y: f32) {
-        self.inputs.insert(rand_id(), Input::new(y));
+        self.inputs.insert(rand_id(), Input::new(Io::new(y)));
     }
 
     pub fn set_input(&mut self, input: u64, state: bool) {
         let Some(input) = self.inputs.get_mut(&input) else { return };
-        input.state = state;
+        input.io.state = state;
         for target in input.links.clone() {
             self.write_queue.push(target.wrap(), state);
         }
     }
-
     pub fn drag_input(&mut self, id: u64, drag: Vec2) {
-        let input = self.inputs.get_mut(&id).unwrap();
-        input.y_pos += drag.y;
-        if let Some(group_id) = input.group_member {
-            let group = self.input_groups.get_mut(&group_id).unwrap();
-            for member_id in group.members.clone() {
-                if member_id == id {
-                    continue;
-                }
-                self.inputs.get_mut(&member_id).unwrap().y_pos += drag.y;
-            }
-        }
+        self.drag_io(IoSel::Input, id, drag)
     }
-
-    pub fn del_input(&mut self, id: u64) {
-        let group_member = self.inputs.get(&id).unwrap().group_member;
-        let Some(group_id) = group_member else {
-        	self.inputs.remove(&id).unwrap();
-        	return;
-        };
-        let members = self.input_groups.get(&group_id).unwrap().members.clone();
-        for member_id in members {
-            self.inputs.remove(&member_id);
-        }
-        self.input_groups.remove(&group_id);
+    pub fn remove_input(&mut self, id: u64) {
+        self.remove_io(IoSel::Input, id)
     }
-
     pub fn stack_input(&mut self, id: u64, settings: &Settings) {
-        let input = self.inputs.get(&id).unwrap();
-        let state = input.state;
-        let name = input.name.clone();
-        let y_pos = input.y_pos;
-
-        fn new_name(name: &str, i: usize) -> String {
-            if name.trim().is_empty() {
-                return String::new();
-            }
-            format!("{}{}", name, i)
-        }
-
-        let sp = settings.scene_pin_col_w;
-        if let Some(group_id) = input.group_member {
-            let group = self.input_groups.get(&group_id).unwrap();
-            let first_input = self.inputs.get(&group.members[0]).unwrap();
-            let new_name = new_name(&first_input.name, group.members.len());
-            let bottom_y = group.input_bottom_y(self);
-
-            let group = self.input_groups.get_mut(&group_id).unwrap();
-            let new_id = rand_id();
-            group.members.push(new_id);
-
-            let input = Input {
-                y_pos: bottom_y + sp,
-                group_member: Some(group_id),
-                links: Vec::new(),
-                name: new_name,
-                state,
-            };
-            self.inputs.insert(new_id, input);
-        } else {
-            let group_id = rand_id();
-            let new_id = rand_id();
-            self.input_groups
-                .insert(group_id, Group::new(vec![id, new_id]));
-            self.inputs.get_mut(&id).unwrap().group_member = Some(group_id);
-
-            let name = new_name(&name, 1);
-            let input = Input {
-                y_pos: y_pos + sp,
-                group_member: Some(group_id),
-                links: Vec::new(),
-                name,
-                state,
-            };
-            self.inputs.insert(new_id, input);
-        }
+        self.stack_io(IoSel::Input, id, settings)
     }
-
     pub fn unstack_input(&mut self, id: u64) {
-        let Some(group_id) = self.inputs.get(&id).unwrap().group_member else {
-        	return
-        };
-        let group = self.input_groups.get_mut(&group_id).unwrap();
-        let member = group.members.pop().unwrap();
-
-        if group.members.len() == 1 {
-            let last_member = group.members[0];
-            self.input_groups.remove(&group_id);
-            self.inputs.get_mut(&id).unwrap().group_member = None;
-            self.inputs.get_mut(&last_member).unwrap().group_member = None;
-        }
-        self.inputs.remove(&member);
+        self.unstack_io(IoSel::Input, id)
     }
-}
-impl Scene {
+
     pub fn add_output(&mut self, y: f32) {
-        self.outputs.insert(rand_id(), Output::new(y));
+        self.outputs.insert(rand_id(), Output::new(Io::new(y)));
     }
-
     pub fn drag_output(&mut self, id: u64, drag: Vec2) {
-        let output = self.outputs.get_mut(&id).unwrap();
-        output.y_pos += drag.y;
-        if let Some(group_id) = output.group_member {
-            let group = self.output_groups.get_mut(&group_id).unwrap();
-            for member_id in group.members.clone() {
-                if member_id == id {
-                    continue;
-                }
-                self.outputs.get_mut(&member_id).unwrap().y_pos += drag.y;
-            }
-        }
+        self.drag_io(IoSel::Output, id, drag)
     }
-
-    pub fn del_output(&mut self, id: u64) {
-        let group_member = self.outputs.get(&id).unwrap().group_member;
-        let Some(group_id) = group_member else {
-        	self.outputs.remove(&id).unwrap();
-        	return;
-        };
-        let members = self.output_groups.get(&group_id).unwrap().members.clone();
-        for member_id in members {
-            self.outputs.remove(&member_id);
-        }
-        self.output_groups.remove(&group_id);
+    pub fn remove_output(&mut self, id: u64) {
+        self.remove_io(IoSel::Output, id)
     }
-
     pub fn stack_output(&mut self, id: u64, settings: &Settings) {
-        let output = self.outputs.get(&id).unwrap();
-        let state = output.state;
-        let name = output.name.clone();
-        let y_pos = output.y_pos;
+        self.stack_io(IoSel::Output, id, settings)
+    }
+    pub fn unstack_output(&mut self, id: u64) {
+        self.unstack_io(IoSel::Output, id)
+    }
 
-        fn new_name(name: &str, i: usize) -> String {
-            if name.trim().is_empty() {
-                return String::new();
-            }
-            format!("{}{}", name, i)
+    pub fn input_field(&self) -> BitField {
+        let mut field = BitField::empty(self.inputs.len());
+        let mut idx = 0;
+        for (_, input) in &self.inputs {
+            field.set(idx, input.io.state);
+            idx += 1;
         }
-
-        let sp = settings.scene_pin_col_w;
-        if let Some(group_id) = output.group_member {
-            let group = self.output_groups.get(&group_id).unwrap();
-            let first_output = self.outputs.get(&group.members[0]).unwrap();
-            let new_name = new_name(&first_output.name, group.members.len());
-            let bottom_y = group.output_bottom_y(self);
-
-            let new_id = rand_id();
-            let group = self.output_groups.get_mut(&group_id).unwrap();
-            group.members.push(new_id);
-
-            let output = Output {
-                y_pos: bottom_y + sp,
-                group_member: Some(group_id),
-                name: new_name,
-                state,
-            };
-            self.outputs.insert(new_id, output);
-        } else {
-            let group_id = rand_id();
-            let new_id = rand_id();
-            self.output_groups
-                .insert(group_id, Group::new(vec![id, new_id]));
-            self.outputs.get_mut(&id).unwrap().group_member = Some(group_id);
-
-            let name = new_name(&name, 1);
-            let output = Output {
-                y_pos: y_pos + sp,
-                group_member: Some(group_id),
-                name,
-                state,
-            };
-            self.outputs.insert(new_id, output);
+        field
+    }
+    pub fn output_field(&self) -> BitField {
+        let mut field = BitField::empty(self.outputs.len());
+        let mut idx = 0;
+        for (_, input) in &self.outputs {
+            field.set(idx, input.io.state);
+            idx += 1;
+        }
+        field
+    }
+    pub fn io_field(&self, sel: IoSel) -> BitField {
+        match sel {
+            IoSel::Input => self.input_field(),
+            IoSel::Output => self.output_field(),
         }
     }
 
-    pub fn unstack_output(&mut self, id: u64) {
-        let Some(group_id) = self.outputs.get(&id).unwrap().group_member else {
-        	return
-        };
-        let group = self.output_groups.get_mut(&group_id).unwrap();
-        let member = group.members.pop().unwrap();
-
-        if group.members.len() == 1 {
-            let last_member = group.members[0];
-            self.output_groups.remove(&group_id);
-            self.outputs.get_mut(&id).unwrap().group_member = None;
-            self.outputs.get_mut(&last_member).unwrap().group_member = None;
-        }
-        self.outputs.remove(&member);
+    pub fn inputs_sorted(&self) -> Vec<u64> {
+        let mut keys: Vec<_> = self.inputs.keys().cloned().collect();
+        keys.sort_by(|a, b| {
+            let a_y = self.inputs.get(a).unwrap().io.y_pos;
+            let b_y = self.inputs.get(b).unwrap().io.y_pos;
+            a_y.partial_cmp(&b_y).unwrap()
+        });
+        keys
+    }
+    pub fn outputs_sorted(&self) -> Vec<u64> {
+        let mut keys: Vec<_> = self.outputs.keys().cloned().collect();
+        keys.sort_by(|a, b| {
+            let a_y = self.outputs.get(a).unwrap().io.y_pos;
+            let b_y = self.outputs.get(b).unwrap().io.y_pos;
+            a_y.partial_cmp(&b_y).unwrap()
+        });
+        keys
     }
 }
 impl Scene {
@@ -609,7 +629,7 @@ impl Scene {
                 let input = self.inputs.get_mut(&input).unwrap();
                 input.links.push(target.clone());
 
-                self.write_queue.push(target.wrap(), input.state);
+                self.write_queue.push(target.wrap(), input.io.state);
             }
             NewLink::DeviceOutputTo(device, output, target) => {
                 let device = self.devices.get_mut(&device).unwrap();
@@ -622,23 +642,23 @@ impl Scene {
     }
 
     #[inline(always)]
-    pub fn get_link_target(&self, target: LinkTarget<u64>) -> Option<bool> {
+    pub fn link_target_state(&self, target: LinkTarget<u64>) -> Option<bool> {
         match target {
             LinkTarget::DeviceInput(device, input) => {
                 let device = self.devices.get(&device)?;
                 Some(device.data.input().get(input))
             }
-            LinkTarget::Output(output) => Some(self.outputs.get(&output)?.state),
+            LinkTarget::Output(output) => Some(self.outputs.get(&output)?.io.state),
         }
     }
     #[inline(always)]
-    pub fn get_link_start(&self, start: LinkStart<u64>) -> Option<bool> {
+    pub fn link_start_state(&self, start: LinkStart<u64>) -> Option<bool> {
         match start {
             LinkStart::DeviceOutput(device, output) => {
                 let device = self.devices.get(&device)?;
                 Some(device.data.output().get(output))
             }
-            LinkStart::Input(input) => Some(self.inputs.get(&input)?.state),
+            LinkStart::Input(input) => Some(self.inputs.get(&input)?.io.state),
         }
     }
 
@@ -652,10 +672,10 @@ impl Scene {
             }
         }
         for (_, device) in &mut self.devices {
-            for output_links in &mut device.links {
-                for link_idx in 0..output_links.len() {
-                    if output_links[link_idx] == target {
-                        output_links.remove(link_idx);
+            for links in &mut device.links {
+                for link_idx in 0..links.len() {
+                    if links[link_idx] == target {
+                        links.remove(link_idx);
                         return true;
                     }
                 }
@@ -682,51 +702,42 @@ impl Group {
         }
     }
 
-    pub fn input_bottom_y(&self, scene: &Scene) -> f32 {
-        scene
-            .inputs
-            .get(self.members.last().unwrap())
-            .unwrap()
-            .y_pos
+    pub fn bottom_y(&self, sel: IoSel, scene: &Scene) -> f32 {
+        let last_id = *self.members.last().unwrap();
+        scene.get_io(sel, last_id).unwrap().y_pos
     }
-    pub fn output_bottom_y(&self, scene: &Scene) -> f32 {
-        scene
-            .outputs
-            .get(self.members.last().unwrap())
-            .unwrap()
-            .y_pos
-    }
-}
-pub fn group_value(group: &Group, states: &[bool]) -> String {
-    let mut value: i64 = 0;
-    let mut bit_value: i64 = 1;
-    let mut last_idx = 0;
 
-    if group.lsb_top {
-        for idx in 0..group.members.len() - 1 {
-            if states[idx] {
-                value += bit_value;
+    pub fn display_value(&self, field: BitField) -> String {
+        let mut value: i64 = 0;
+        let mut bit_value: i64 = 1;
+        let mut last_idx = 0;
+
+        if self.lsb_top {
+            for idx in 0..self.members.len() - 1 {
+                if field.get(idx) {
+                    value += bit_value;
+                }
+                bit_value *= 2;
             }
-            bit_value *= 2;
-        }
-        last_idx = group.members.len() - 1;
-    } else {
-        for idx in (1..group.members.len()).rev() {
-            if states[idx] {
-                value += bit_value;
+            last_idx = self.members.len() - 1;
+        } else {
+            for idx in (1..self.members.len()).rev() {
+                if field.get(idx) {
+                    value += bit_value;
+                }
+                bit_value *= 2;
             }
-            bit_value *= 2;
         }
-    }
-    if states[last_idx] {
-        if group.signed {
-            bit_value *= -1;
+        if field.get(last_idx) {
+            if self.signed {
+                bit_value *= -1;
+            }
+            value += bit_value;
         }
-        value += bit_value;
-    }
-    if group.hex {
-        format!("{:X}", value)
-    } else {
-        format!("{}", value)
+        if self.hex {
+            format!("{:X}", value)
+        } else {
+            format!("{}", value)
+        }
     }
 }

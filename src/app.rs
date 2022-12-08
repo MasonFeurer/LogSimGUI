@@ -3,7 +3,7 @@ use crate::graphics::{Graphics, View};
 use crate::integration::{FrameInput, FrameOutput, Keybind};
 use crate::preset::*;
 use crate::preset_placer::PresetPlacer;
-use crate::scene::{Device, Scene, SceneItem};
+use crate::scene::{Device, IoSel, Scene, SceneItem};
 use crate::settings::Settings;
 use crate::*;
 use egui::*;
@@ -11,7 +11,7 @@ use egui::*;
 const COMBINATIONAL_MSG: &str = "will use a truth table for the created preset";
 const SAVE_SCENE_MSG: &str =
     "store state of scene along side the created preset,\nallowing the preset to be later modified";
-const AUTO_LINK_MSG: &str = "automatically start/finish a link when you hover a pin";
+const AUTO_LINK_MSG: &str = "automatically start/finish placing a link when you hover a pin";
 const CREATE_MSG: &str = "pack the scene into a preset for later use";
 
 #[derive(Clone)]
@@ -98,7 +98,7 @@ pub struct App {
     presets_menu_sel: Option<String>,
     /// If we right click on some scene item, shows a popup
     pub edit_popup: Option<SceneItem>,
-    /// If we started creating some links
+    /// If we started placing some links
     pub link_starts: Vec<LinkStart<u64>>,
     /// The config for creating a new preset from the scene
     create_preset: CreatePreset,
@@ -110,7 +110,7 @@ pub struct App {
     pub held_presets: Vec<String>,
     /// If we've selected multiple devices for bulk actions
     pub selected_devices: Vec<u64>,
-    /// If true, we should automatically start/finish a link when we hover the pin
+    /// If true, we should automatically start/finish placing a link when we hover the pin
     auto_link: bool,
 
     // --- keybinds ---
@@ -151,7 +151,7 @@ impl App {
     pub fn create(&mut self) {
         self.create_err = None;
         let data = if self.create_preset.combinational {
-            match CombGatePreset::from_scene(&self.scene) {
+            match CombGatePreset::from_scene(&mut self.scene) {
                 Ok(v) => PresetData::CombGate(v),
                 Err(e) => {
                     self.create_err = Some(format!("Can't create combination gate: {}", e));
@@ -207,10 +207,10 @@ impl App {
         self.link_starts.insert(0, start);
     }
     pub fn finish_link(&mut self, target: LinkTarget<u64>) -> bool {
-        let Some(link) = self.link_starts.last().cloned() else {
+        let Some(start) = self.link_starts.last().cloned() else {
         	return false;
         };
-        let new_link = match link {
+        let new_link = match start {
             LinkStart::DeviceOutput(device, output) => {
                 NewLink::DeviceOutputTo(device, output, target)
             }
@@ -515,7 +515,7 @@ impl App {
         // --- show links to pointer ---
         for idx in (0..self.link_starts.len()).rev() {
             let link_start = self.link_starts[idx].clone();
-            let Some(state) = self.scene.get_link_start(link_start) else {
+            let Some(state) = self.scene.link_start_state(link_start) else {
             	self.link_starts.remove(idx);
             	continue;
             };
@@ -600,7 +600,7 @@ impl App {
                 let size = Vec2::new(100.0, 60.0);
                 let pos = Pos2::new(
                     self.scene.rect.min.x + col_w,
-                    graphics::map_io_y(&self.view, group.input_bottom_y(&self.scene))
+                    graphics::map_io_y(&self.view, group.bottom_y(IoSel::Input, &self.scene))
                         + graphics::GROUP_HEADER_SIZE,
                 );
                 Rect::from_min_size(pos, size)
@@ -610,7 +610,7 @@ impl App {
                 let size = Vec2::new(100.0, 60.0);
                 let pos = Pos2::new(
                     self.scene.rect.max.x - col_w - size.x,
-                    graphics::map_io_y(&self.view, group.output_bottom_y(&self.scene))
+                    graphics::map_io_y(&self.view, group.bottom_y(IoSel::Output, &self.scene))
                         + graphics::GROUP_HEADER_SIZE,
                 );
                 Rect::from_min_size(pos, size)
@@ -622,12 +622,13 @@ impl App {
             SceneItem::InputBulb(id) => {
                 let input = self.scene.inputs.get(&id).unwrap();
                 let group_count = input
+                    .io
                     .group_member
                     .map(|id| self.scene.input_groups.get(&id).unwrap().members.len());
                 let input = self.scene.inputs.get_mut(&id).unwrap();
                 ui.horizontal(|ui| {
                     ui.label("name: ");
-                    ui.text_edit_singleline(&mut input.name).request_focus();
+                    ui.text_edit_singleline(&mut input.io.name).request_focus();
                     self.focused_text_field = true;
                 });
                 ui.horizontal(|ui| {
@@ -641,19 +642,20 @@ impl App {
                         self.scene.stack_input(id, &self.settings);
                     }
                     if ui.button("delete").clicked() {
-                        self.scene.del_input(id);
+                        self.scene.remove_input(id);
                     }
                 });
             }
             SceneItem::OutputBulb(id) => {
                 let output = self.scene.outputs.get(&id).unwrap();
                 let group_count = output
+                    .io
                     .group_member
                     .map(|id| self.scene.output_groups.get(&id).unwrap().members.len());
                 let output = self.scene.outputs.get_mut(&id).unwrap();
                 ui.horizontal(|ui| {
                     ui.label("name: ");
-                    ui.text_edit_singleline(&mut output.name).request_focus();
+                    ui.text_edit_singleline(&mut output.io.name).request_focus();
                     self.focused_text_field = true;
                 });
                 ui.horizontal(|ui| {
@@ -667,7 +669,7 @@ impl App {
                         self.scene.stack_output(id, &self.settings);
                     }
                     if ui.button("delete").clicked() {
-                        self.scene.del_output(id);
+                        self.scene.remove_output(id);
                     }
                 });
             }
@@ -768,11 +770,11 @@ impl App {
                 if input.pressed(Key::Backspace) {
                     if self.selected_devices.contains(&id) {
                         for id in &self.selected_devices {
-                            self.scene.del_device(*id);
+                            self.scene.remove_device(*id);
                         }
                         self.selected_devices.clear();
                     } else {
-                        self.scene.del_device(id);
+                        self.scene.remove_device(id);
                     }
                 }
                 if input.pressed_prim && input.modifiers.shift {
@@ -783,14 +785,14 @@ impl App {
             }
             SceneItem::InputBulb(id) => {
                 if input.clicked_prim {
-                    let state = self.scene.inputs.get(&id).unwrap().state;
+                    let state = self.scene.inputs.get(&id).unwrap().io.state;
                     self.scene.set_input(id, !state);
                 }
                 if input.pressed_sec {
                     self.edit_popup = Some(item);
                 }
                 if input.pressed(Key::Backspace) && !self.focused_text_field {
-                    self.scene.del_input(id);
+                    self.scene.remove_input(id);
                 }
                 if input.pressed(Key::ArrowDown) {
                     self.scene.stack_input(id, &self.settings);
@@ -819,7 +821,7 @@ impl App {
             }
             SceneItem::OutputBulb(id) => {
                 if input.pressed(Key::Backspace) {
-                    self.scene.del_output(id);
+                    self.scene.remove_output(id);
                 }
                 if input.pressed_sec {
                     self.edit_popup = Some(item);

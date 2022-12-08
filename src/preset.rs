@@ -14,63 +14,63 @@ pub struct CombGatePreset {
     pub table: TruthTable,
 }
 impl CombGatePreset {
-    pub fn from_scene(scene: &Scene) -> Result<Self, String> {
-        let mut scene = scene.clone();
+    pub fn from_scene(scene: &mut Scene) -> Result<Self, &'static str> {
+        let original_scene = scene.clone();
+
+        if scene.inputs.len() > 64 {
+            return Err("Too many inputs (max is 64)");
+        }
+        if scene.outputs.len() > 64 {
+            return Err("Too many outputs (max is 64)");
+        }
+
         // create truth table from scene
         let num_inputs = scene.inputs.len();
         let num_outputs = scene.outputs.len();
+        let total_states: u64 = if num_inputs == 0 { 0 } else { 1 << num_inputs };
 
         let inputs = scene.inputs_sorted();
         let outputs = scene.outputs_sorted();
 
-        let total_states = {
-            let mut temp = if inputs.is_empty() { 0 } else { 1 };
-            for _ in 0..inputs.len() {
-                temp *= 2;
-            }
-            temp
-        };
-        let mut output_states = Vec::with_capacity(total_states);
-
-        // I do not care to support combination gates with 32+ inputs
-        // (32 inputs would have ~2 billion states)
-        let mut input: u32 = 0;
-        while (input >> num_inputs as u32) == 0 {
+        let mut output_states = Vec::with_capacity(total_states as usize);
+        let mut input_state: u64 = 0;
+        while input_state <= total_states {
             // set inputs
             for i in 0..num_inputs {
-                let state = ((input >> i as u32) & 1) == 1;
+                let state = ((input_state >> i as u64) & 1) == 1;
                 scene.set_input(inputs[i], state);
             }
 
             // execute queued writes
             let mut total_updates = 0;
             while scene.write_queue.len() > 0 {
-                total_updates += 1;
-                scene.update();
                 if total_updates > 1000 {
-                    return Err("Has a loop, or is too big".to_owned());
+                    return Err("Has a loop or is too big");
                 }
+                scene.update();
+                total_updates += 1;
             }
 
             // store output
             let mut output = BitField::empty(num_outputs);
             for i in 0..num_outputs {
-                let state = scene.outputs.get(&outputs[i]).unwrap().state;
+                let state = scene.outputs.get(&outputs[i]).unwrap().io.state;
                 output.set(i, state);
             }
             output_states.push(output.data);
 
-            input += 1;
+            input_state += 1;
         }
 
         let inputs = inputs
             .into_iter()
-            .map(|id| scene.inputs.get(&id).unwrap().name.clone())
+            .map(|id| scene.inputs.get(&id).unwrap().io.name.clone())
             .collect();
         let outputs = outputs
             .into_iter()
-            .map(|id| scene.outputs.get(&id).unwrap().name.clone())
+            .map(|id| scene.outputs.get(&id).unwrap().io.name.clone())
             .collect();
+        *scene = original_scene;
         Ok(Self {
             inputs,
             outputs,

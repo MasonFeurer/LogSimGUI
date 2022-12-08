@@ -59,7 +59,7 @@ pub struct BitField {
 }
 impl BitField {
     pub const fn empty(len: usize) -> Self {
-        assert!(len <= 32);
+        assert!(len <= 64);
         Self { len, data: 0 }
     }
 

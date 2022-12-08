@@ -175,8 +175,8 @@ mod step1 {
                     }
                 }
                 let input = Input {
-                    y_pos: input.y_pos,
-                    name: input.name.clone(),
+                    y_pos: input.io.y_pos,
+                    name: input.io.name.clone(),
                     links,
                 };
                 (*id, input)
@@ -189,8 +189,8 @@ mod step1 {
             .iter()
             .map(|(id, output)| {
                 let output = Output {
-                    y_pos: output.y_pos,
-                    name: output.name.clone(),
+                    y_pos: output.io.y_pos,
+                    name: output.io.name.clone(),
                 };
                 (*id, output)
             })

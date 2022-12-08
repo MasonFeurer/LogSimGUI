@@ -1,16 +1,16 @@
 use crate::preset::DevicePreset;
-use crate::scene::{group_value, Device, Group, Scene, SceneItem};
+use crate::scene::{Device, Group, IoSel, Scene, SceneItem};
 use crate::settings::Settings;
 use crate::*;
 use egui::*;
 
 #[inline(always)]
 pub fn scene_input_view_y(scene: &Scene, id: u64, v: &View) -> Option<f32> {
-    Some(map_io_y(v, scene.inputs.get(&id)?.y_pos))
+    Some(map_io_y(v, scene.inputs.get(&id)?.io.y_pos))
 }
 #[inline(always)]
 pub fn scene_output_view_y(scene: &Scene, id: u64, v: &View) -> Option<f32> {
-    Some(map_io_y(v, scene.outputs.get(&id)?.y_pos))
+    Some(map_io_y(v, scene.outputs.get(&id)?.io.y_pos))
 }
 #[inline(always)]
 pub fn unmap_io_y(v: &View, y: f32) -> f32 {
@@ -352,11 +352,11 @@ pub fn show_group_header(
     g: &mut Graphics,
     col_w: f32,
     group: &Group,
-    states: &[bool],
+    field: BitField,
     center: f32,
     top: f32,
 ) -> bool {
-    let text = group_value(group, states);
+    let text = group.display_value(field);
     let size = GROUP_HEADER_SIZE;
     let rect = Rect::from_min_size(Pos2::new(center - col_w * 0.5, top), Vec2::new(col_w, size));
     let hovered = g.rect(
@@ -574,7 +574,7 @@ pub fn show_scene(
             	dead_links.push((LinkStart::Input(*input_id), link_idx));
             	continue;
             };
-            let hovered = show_link(g, s, input.state, link_start, target_pos);
+            let hovered = show_link(g, s, input.io.state, link_start, target_pos);
             if hovered && interact_w_link {
                 result = Some(SceneItem::InputLink(*input_id, link_idx));
             }
@@ -613,6 +613,7 @@ pub fn show_scene(
     // --- Show input pins ---
     let pin_size = s.scene_pin_size * view.scale();
     for (input_id, input) in &scene.inputs {
+        let input = &input.io;
         let y = scene_input_view_y(scene, *input_id, view).unwrap();
         let x = rect.min.x + col_w * 0.5;
 
@@ -634,18 +635,16 @@ pub fn show_scene(
     // --- Show input group headers ---
     for (group_id, group) in &scene.input_groups {
         let center = rect.min.x + col_w * 0.5;
-        let mut states = Vec::with_capacity(group.members.len());
-        for member_id in &group.members {
-            states.push(scene.inputs.get(member_id).unwrap().state);
-        }
-        let header_top = map_io_y(&view, group.input_bottom_y(scene)) + col_w * 0.5;
-        if show_group_header(g, col_w, group, &states, center, header_top) {
+        let field = scene.input_field();
+        let header_top = map_io_y(&view, group.bottom_y(IoSel::Input, scene)) + col_w * 0.5;
+        if show_group_header(g, col_w, group, field, center, header_top) {
             result = Some(SceneItem::InputGroup(*group_id));
         }
     }
 
     // --- Show output pins ---
     for (output_id, output) in &scene.outputs {
+        let output = &output.io;
         let y = scene_output_view_y(scene, *output_id, view).unwrap();
         let x = rect.max.x - col_w * 0.5;
 
@@ -672,12 +671,9 @@ pub fn show_scene(
     // --- Show output group headers ---
     for (group_id, group) in &scene.output_groups {
         let center = rect.max.x - col_w * 0.5;
-        let mut states = Vec::with_capacity(group.members.len());
-        for member_id in &group.members {
-            states.push(scene.outputs.get(member_id).unwrap().state);
-        }
-        let header_top = map_io_y(view, group.output_bottom_y(scene)) + col_w * 0.5;
-        if show_group_header(g, col_w, group, &states, center, header_top) {
+        let field = scene.output_field();
+        let header_top = map_io_y(view, group.bottom_y(IoSel::Output, scene)) + col_w * 0.5;
+        if show_group_header(g, col_w, group, field, center, header_top) {
             result = Some(SceneItem::OutputGroup(*group_id));
         }
     }
