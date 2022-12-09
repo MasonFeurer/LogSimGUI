@@ -180,12 +180,17 @@ pub fn read_dir<P: AsRef<Path>, F: Fn(&PathBuf) -> bool>(
     Ok(results)
 }
 pub fn load_presets_in<P: AsRef<Path>>(path: &P) -> Result<Vec<DevicePreset>, Err> {
-    let add_ctx = |e: Err| e.context("Failed to load presets");
     let mut presets = Vec::new();
 
     let cond = |f: &PathBuf| Encoding::Data.file_matches(f);
-    for entry in read_dir(path, cond).map_err(add_ctx)? {
-        let preset: DevicePreset = load(&entry, Encoding::Data).map_err(add_ctx)?;
+    for entry in read_dir(path, cond).map_err(|err| err.context("Failed to load presets"))? {
+        let preset: DevicePreset = match load(&entry, Encoding::Data) {
+            Ok(preset) => preset,
+            Err(err) => {
+                err.context("Failed to load preset").log();
+                continue;
+            }
+        };
         presets.push(preset);
     }
     Ok(presets)
