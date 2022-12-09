@@ -27,14 +27,14 @@ impl CombGatePreset {
         // create truth table from scene
         let num_inputs = scene.inputs.len();
         let num_outputs = scene.outputs.len();
-        let total_states: u64 = if num_inputs == 0 { 0 } else { 1 << num_inputs };
+        let total_states: u64 = 1 << num_inputs;
 
         let inputs = scene.inputs_sorted();
         let outputs = scene.outputs_sorted();
 
         let mut output_states = Vec::with_capacity(total_states as usize);
         let mut input_state: u64 = 0;
-        while input_state <= total_states {
+        while input_state < total_states {
             // set inputs
             for i in 0..num_inputs {
                 let state = ((input_state >> i as u64) & 1) == 1;
