@@ -66,6 +66,8 @@ impl DevOptions {
             if self.enable_step == ENABLE_SEQ.len() {
                 self.enabled = true;
             }
+        } else if input.pressed_keys.len() > 0 {
+            self.enable_step = 0;
         }
     }
 }

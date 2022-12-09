@@ -2,5 +2,4 @@
 - Add bus device
 - Allow for links to be created with anchor points (maybe without changing save format of Scene?)
 - Make a tutorial
-- BEFORE NEXT RELEASE: Add code for loading the old presets and updating them to the new data layout
-- BUG: The debug window will show up even if IMADEV isn't pressed in order, or if you press random keys in between
+- FIX web version
