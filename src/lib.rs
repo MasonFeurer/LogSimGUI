@@ -11,8 +11,6 @@ pub mod settings;
 
 use egui::{Pos2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
-use tinyrand::{Rand, Seeded, StdRand};
 
 pub use app::{App, AppItem, CreateApp};
 pub use integration::{FrameInput, FrameOutput, Keybind};
@@ -20,13 +18,11 @@ pub use preset::{DevicePreset, PresetData, Presets};
 pub use scene::Scene;
 pub use settings::Settings;
 
-lazy_static::lazy_static! {
-    pub static ref RAND: Mutex<StdRand> = Mutex::new(StdRand::seed(2538292));
-}
-
 #[inline(always)]
 pub fn rand_id() -> u64 {
-    RAND.lock().unwrap().next_u64()
+    let mut bytes = [0; 8];
+    getrandom::getrandom(&mut bytes).unwrap();
+    u64::from_le_bytes(bytes)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
