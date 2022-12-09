@@ -65,7 +65,7 @@ impl<T> WriteQueue<T> {
         Self {
             writes,
             buffer: Vec::new(),
-            rand: StdRand::seed(727841),
+            rand: StdRand::seed(rand_id()),
         }
     }
     pub fn empty() -> Self {

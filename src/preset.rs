@@ -137,67 +137,64 @@ impl DevicePreset {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
+pub enum Change {
+    Removed(String),
+    Added(String),
+    Modified(String),
+}
+
+#[derive(Debug)]
 pub struct Presets {
     presets: Vec<DevicePreset>,
-    dirty: Vec<String>,
-    removed: Vec<String>,
+    changes: Vec<Change>,
 }
 impl Presets {
-    pub fn default() -> Self {
-        let mut presets = Self::new(vec![]);
-        presets.add_preset(and_gate_preset());
-        presets.add_preset(not_gate_preset());
-        presets
-    }
-    pub fn new(presets: Vec<DevicePreset>) -> Self {
+    pub fn new() -> Self {
         Self {
-            presets,
-            dirty: Vec::new(),
-            removed: Vec::new(),
+            presets: Vec::new(),
+            changes: Vec::new(),
         }
     }
+    pub fn default() -> Self {
+        let mut presets = Self::new();
+        presets.add_preset(and_gate_preset(), true);
+        presets.add_preset(not_gate_preset(), true);
+        presets
+    }
 
-    #[inline(always)]
-    pub fn consume_dirty(&mut self) -> Vec<String> {
+    pub fn consume_changes(&mut self) -> Vec<Change> {
         let mut new = Vec::new();
-        std::mem::swap(&mut self.dirty, &mut new);
+        std::mem::swap(&mut self.changes, &mut new);
         new
     }
-    #[inline(always)]
-    pub fn consume_removed(&mut self) -> Vec<String> {
-        let mut new = Vec::new();
-        std::mem::swap(&mut self.removed, &mut new);
-        new
-    }
-    #[inline(always)]
     pub fn get(&self) -> &[DevicePreset] {
         &self.presets
     }
 
-    pub fn merge(&mut self, presets: &[DevicePreset]) {
+    pub fn add_presets(&mut self, presets: &[DevicePreset]) {
         for preset in presets {
-            if let Some(idx) = self.get_preset_idx(&preset.name) {
-                self.presets[idx] = preset.clone();
-            } else {
-                self.presets.push(preset.clone());
-            }
-            self.dirty.push(preset.name.clone());
+            self.add_preset(preset.clone(), true);
         }
     }
+    pub fn add_preset(&mut self, preset: DevicePreset, save: bool) {
+        let name = preset.name.clone();
 
-    pub fn add_preset(&mut self, preset: DevicePreset) {
-        self.dirty.push(preset.name.clone());
-        if let Some(idx) = self.get_preset_idx(&preset.name) {
-            self.presets[idx] = preset;
+        let change = if let Some(idx) = self.get_preset_idx(&name) {
+            self.presets[idx] = preset.clone();
+            Change::Modified(name)
         } else {
-            self.presets.push(preset);
+            self.presets.push(preset.clone());
+            Change::Added(name)
+        };
+        if save {
+            self.changes.push(change);
         }
     }
     pub fn remove_preset(&mut self, name: &str) {
         let idx = self.get_preset_idx(name).unwrap();
         self.presets.remove(idx);
-        self.removed.push(String::from(name));
+        self.changes.push(Change::Removed(String::from(name)));
     }
 
     #[inline(always)]

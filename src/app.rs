@@ -163,13 +163,14 @@ impl App {
         };
 
         let save_scene = self.create_preset.save_scene;
-        self.presets.add_preset(DevicePreset {
+        let preset = DevicePreset {
             data,
             name: self.create_preset.name.clone(),
             color: self.create_preset.color.to_array(),
             src: PresetSource::Scene(save_scene.then(|| self.scene.clone())),
             cat: self.create_preset.cat.clone(),
-        });
+        };
+        self.presets.add_preset(preset, true);
         self.scene = Scene::new();
 
         let cat = self.create_preset.cat.clone();

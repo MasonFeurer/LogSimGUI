@@ -64,7 +64,7 @@ impl eframe::App for NativeApp {
         if output.import_presets {
             for path in rfd::FileDialog::new().pick_files().unwrap_or(Vec::new()) {
                 match persist::load::<_, DevicePreset>(&path, persist::Encoding::Data) {
-                    Ok(preset) => self.app.presets.merge(&[preset]),
+                    Ok(preset) => self.app.presets.add_presets(&[preset]),
                     Err(err) => err.context("Failed to load preset").log(),
                 }
             }

@@ -1,4 +1,5 @@
-use log_sim_gui::preset::{DevicePreset, Presets};
+use log_sim_gui::old_data::OldDevicePreset;
+use log_sim_gui::preset::{Change, DevicePreset, Presets};
 use log_sim_gui::scene::Scene;
 use log_sim_gui::settings::Settings;
 use serde::Serialize;
@@ -148,18 +149,21 @@ pub fn save_presets(presets: &mut Presets) -> Result<(), Err> {
         }
     }
 
-    let removed = presets.consume_removed();
-    let dirty = presets.consume_dirty();
-    for name in dirty {
-        path.push(format!("{}.data", name));
-        let preset = presets.get_preset(&name).unwrap();
-        save(&path, preset, Encoding::Data)?;
-        path.pop();
-    }
-    for name in removed {
-        path.push(format!("{}.data", name));
-        let _ = fs::remove_file(&path);
-        path.pop();
+    let changes = presets.consume_changes();
+    for change in changes {
+        match change {
+            Change::Added(name) | Change::Modified(name) => {
+                path.push(format!("{}.data", name));
+                let preset = presets.get_preset(&name).unwrap();
+                save(&path, preset, Encoding::Data)?;
+                path.pop();
+            }
+            Change::Removed(name) => {
+                path.push(format!("{}.data", name));
+                let _ = fs::remove_file(&path);
+                path.pop();
+            }
+        }
     }
     Ok(())
 }
@@ -179,26 +183,39 @@ pub fn read_dir<P: AsRef<Path>, F: Fn(&PathBuf) -> bool>(
     }
     Ok(results)
 }
-pub fn load_presets_in<P: AsRef<Path>>(path: &P) -> Result<Vec<DevicePreset>, Err> {
-    let mut presets = Vec::new();
+// returns the Device preset and if it is dirty (should be re-saved)
+pub fn load_preset<P: AsRef<Path>>(path: &P, presets: &mut Presets) -> Result<(), Err> {
+    let add_ctx = |err: Err| err.context("Failed to load preset");
+
+    let preset: Result<DevicePreset, _> = load(path, Encoding::Data).map_err(add_ctx);
+    let old_preset: Result<OldDevicePreset, _> = load(path, Encoding::Data);
+
+    match (preset, old_preset) {
+        (Ok(preset), _) => {
+            presets.add_preset(preset, false);
+        }
+        (_, Ok(old_preset)) => {
+            presets.add_preset(old_preset.update(), true);
+        }
+        (Err(err), _) => return Err(err),
+    }
+    Ok(())
+}
+pub fn load_presets_in<P: AsRef<Path>>(path: &P) -> Result<Presets, Err> {
+    let mut presets = Presets::new();
 
     let cond = |f: &PathBuf| Encoding::Data.file_matches(f);
-    for entry in read_dir(path, cond).map_err(|err| err.context("Failed to load presets"))? {
-        let preset: DevicePreset = match load(&entry, Encoding::Data) {
-            Ok(preset) => preset,
-            Err(err) => {
-                err.context("Failed to load preset").log();
-                continue;
-            }
-        };
-        presets.push(preset);
+    let add_ctx = |err: Err| err.context("Failed to load presets");
+
+    for entry in read_dir(path, cond).map_err(add_ctx)? {
+        load_preset(&entry, &mut presets)?;
     }
     Ok(presets)
 }
 pub fn load_presets() -> Result<Presets, Err> {
     let mut path = persist_dir();
     path.push("presets");
-    load_presets_in(&path).map(Presets::new)
+    load_presets_in(&path)
 }
 
 pub fn save_settings(settings: &Settings) -> Result<(), Err> {

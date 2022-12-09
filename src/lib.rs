@@ -4,6 +4,7 @@ pub mod app;
 pub mod dev;
 pub mod graphics;
 pub mod integration;
+pub mod old_data;
 pub mod preset;
 pub mod preset_placer;
 pub mod scene;
