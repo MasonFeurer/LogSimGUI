@@ -5,7 +5,7 @@ Was originally a typo, but is now the name of a Logic Gate simulator. The app is
 MacOS is the most supported, but it is also tested on Windows and Linux (debian based).
 In `/releases/latest_date/` there should be built binaries for MacOS, Windows, and Linux.
 
-You can also use LogSimGUI in the browser [here](http://logsimgui.ga).
+You can also use LogSimGUI in the browser [here](https://logsimgui.ga).
 
 You can also build and run the native application from source:
 ```sh
