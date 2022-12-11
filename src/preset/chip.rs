@@ -28,10 +28,15 @@ impl ChipPreset {
     }
 }
 
+pub fn map_links(links: &[Link]) -> Vec<LinkTarget<u64>> {
+    links.iter().map(|link| link.target).collect()
+}
+
 // When unnesting occurs.
 // New ID's are created for nested CombGates when they are unnested,
 // and all links pointing at that CombGate is changed to the new ID
 mod step1 {
+    use super::map_links;
     use crate::*;
     use hashbrown::HashMap;
 
@@ -76,7 +81,11 @@ mod step1 {
                         *id,
                         CombGate {
                             table: comb_gate.table.clone(),
-                            links: scene_device.links.clone(),
+                            links: scene_device
+                                .links
+                                .iter()
+                                .map(|links| map_links(links))
+                                .collect(),
                         },
                     );
                 }
@@ -114,9 +123,8 @@ mod step1 {
                                         LinkTarget::DeviceInput(device, input) => new_links.push(
                                             LinkTarget::DeviceInput(device_ids[*device], *input),
                                         ),
-                                        LinkTarget::Output(output) => {
-                                            new_links.extend(scene_device.links[*output].clone())
-                                        }
+                                        LinkTarget::Output(output) => new_links
+                                            .extend(map_links(&scene_device.links[*output])),
                                     }
                                 }
                                 new_links
@@ -166,12 +174,15 @@ mod step1 {
             .map(|(id, input)| {
                 let mut links = Vec::with_capacity(input.links.len());
 
-                for DeviceInput(device, input) in &input.links {
-                    match moved_chips.get(device) {
+                for link in &input.links {
+                    let LinkTarget::DeviceInput(device, input) = link.target else {
+                		panic!("Invalid scene: input links to output");
+                	};
+                    match moved_chips.get(&device) {
                         // links to chip input (because all chips are in `moved_chips`)
-                        Some(moved_chip) => links.extend(moved_chip.input_links[*input].clone()),
+                        Some(moved_chip) => links.extend(moved_chip.input_links[input].clone()),
                         // doesn't link to chip input
-                        None => links.push(DeviceInput(*device, *input)),
+                        None => links.push(DeviceInput(device, input)),
                     }
                 }
                 let input = Input {

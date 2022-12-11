@@ -36,8 +36,8 @@ impl Chip {
                 if !output.get(i) {
                     continue;
                 }
-                for target in &comb_gate.links[i as usize] {
-                    write_queue.push(target.clone(), true);
+                for target in &comb_gate.links[i] {
+                    write_queue.push(*target, true);
                 }
             }
 
@@ -98,8 +98,8 @@ impl Chip {
 
         let mut changed_outputs = device.data.set_input(input, state);
         while let Some((output, state)) = changed_outputs.next() {
-            for target in device.links[output].clone() {
-                self.write_queue.push_buffer(target, state);
+            for target in &device.links[output] {
+                self.write_queue.push_buffer(*target, state);
             }
         }
     }

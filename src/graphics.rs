@@ -544,11 +544,11 @@ pub fn show_scene(
 
         let links = device_output_links(s, view, device_rect, device.num_outputs());
         for output_idx in 0..device.links.len() {
-            for (link_idx, target) in device.links[output_idx].iter().enumerate() {
+            for (link_idx, link) in device.links[output_idx].iter().enumerate() {
                 let state = device.data.output().get(output_idx);
                 let link_start = links[output_idx];
 
-                let Some(target_pos) = link_target_pos(s, view, scene, *target) else {
+                let Some(target_pos) = link_target_pos(s, view, scene, link.target) else {
                 	dead_links.push((LinkStart::DeviceOutput(*device_id, output_idx), link_idx));
                 	continue;
                 };
@@ -569,8 +569,8 @@ pub fn show_scene(
             x: rect.min.x + s.scene_pin_col_w * view.scale() + s.scene_pin_size.x * view.scale(),
             y,
         };
-        for (link_idx, target) in input.links.iter().enumerate() {
-            let Some(target_pos) = link_target_pos(s, view, scene, target.wrap()) else {
+        for (link_idx, link) in input.links.iter().enumerate() {
+            let Some(target_pos) = link_target_pos(s, view, scene, link.target) else {
             	dead_links.push((LinkStart::Input(*input_id), link_idx));
             	continue;
             };

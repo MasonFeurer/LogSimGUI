@@ -1,5 +1,6 @@
 use crate::app::{App, AppItem};
 use crate::integration::{FrameInput, FrameOutput};
+use crate::scene::{DeviceData, SceneItem};
 use egui::*;
 
 const ENABLE_SEQ: &[Key] = &[Key::I, Key::M, Key::A, Key::D, Key::E, Key::V];
@@ -31,10 +32,29 @@ impl DevOptions {
         ui.checkbox(&mut app.dev_options.device_ids, "device IDs");
 
         ui.label(format!("hovered: {:?}", input.prev_hovered));
+        if let AppItem::SceneItem(SceneItem::Device(id)) = input.prev_hovered {
+            let Some(device) = app.scene.devices.get(&id) else {
+            	return
+            };
+            match &device.data {
+                DeviceData::Chip(chip) => {
+                    ui.label("data: Chip");
+                    ui.label(format!("writes: {}", chip.write_queue.len()));
+                    ui.label(format!("devices: {}", chip.devices.len()));
+                }
+                DeviceData::CombGate(_) => {
+                    ui.label("data: CombGate");
+                }
+            }
+            ui.add_space(10.0);
+        }
+
         ui.label(format!("drag: {:?}", input.drag));
         ui.label(format!("selected devices: {:?}", app.selected_devices));
         ui.label(format!("link starts: {:?}", app.link_starts));
         ui.label(format!("edit popup: {:?}", app.edit_popup));
+
+        ui.add_space(10.0);
 
         ui.label(format!("write queue: ({})", app.scene.write_queue.len()));
         for write in &app.scene.write_queue.writes {

@@ -12,5 +12,5 @@ getrandom = "^0.2.8"
 tinyrand = "0.5"
 hashbrown = { version = "0.13.1", features = ["serde"] }
 
-egui = { git = "https://github.com/emilk/egui.git" }
-epaint = { git = "https://github.com/emilk/egui.git", features = ["serde"] }
+egui = { version = "0.20", features = ["serde"] }
+epaint = { version = "0.20", features = ["serde"] }

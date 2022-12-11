@@ -44,9 +44,16 @@ impl<T: Copy> DeviceInput<T> {
     }
 }
 
-pub enum NewLink<T> {
-    InputToDeviceInput(T, DeviceInput<T>),
-    DeviceOutputTo(T, usize, LinkTarget<T>),
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Link {
+    pub target: LinkTarget<u64>,
+    pub anchors: Vec<Pos2>,
+}
+impl Link {
+    pub fn new(target: LinkTarget<u64>) -> Self {
+        let anchors = Vec::new();
+        Self { target, anchors }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

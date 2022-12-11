@@ -5,6 +5,7 @@ use crate::preset::*;
 use crate::preset_placer::PresetPlacer;
 use crate::scene::{Device, IoSel, Scene, SceneItem};
 use crate::settings::Settings;
+use crate::Link;
 use crate::*;
 use egui::*;
 
@@ -211,20 +212,7 @@ impl App {
         let Some(start) = self.link_starts.last().cloned() else {
         	return false;
         };
-        let new_link = match start {
-            LinkStart::DeviceOutput(device, output) => {
-                NewLink::DeviceOutputTo(device, output, target)
-            }
-            LinkStart::Input(id) => {
-                let device_input = match target {
-                    LinkTarget::DeviceInput(device, input) => DeviceInput(device, input),
-                    LinkTarget::Output(_) => return false,
-                };
-                NewLink::InputToDeviceInput(id, device_input)
-            }
-        };
-        self.scene.remove_link_to(target);
-        self.scene.add_link(new_link);
+        self.scene.add_link(start, Link::new(target));
         self.link_starts.pop().unwrap();
         true
     }
@@ -810,9 +798,9 @@ impl App {
             SceneItem::InputLink(input_id, link_idx) => {
                 if input.pressed(Key::Backspace) {
                     let links = &mut self.scene.inputs.get_mut(&input_id).unwrap().links;
-                    let link = links[link_idx].clone();
+                    let target = links[link_idx].target;
                     links.remove(link_idx);
-                    self.scene.write_queue.push(link.wrap(), false);
+                    self.scene.write_queue.push(target, false);
                 }
             }
             SceneItem::InputGroup(_) => {
@@ -867,9 +855,9 @@ impl App {
                 if input.pressed(Key::Backspace) {
                     let links =
                         &mut self.scene.devices.get_mut(&device_id).unwrap().links[output_idx];
-                    let link = links[link_idx].clone();
+                    let target = links[link_idx].target;
                     links.remove(link_idx);
-                    self.scene.write_queue.push(link, false);
+                    self.scene.write_queue.push(target, false);
                 }
             }
         }

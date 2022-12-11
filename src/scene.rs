@@ -76,42 +76,39 @@ impl<T> WriteQueue<T> {
     pub fn len(&self) -> usize {
         self.writes.len()
     }
+
+    pub fn clear(&mut self) {
+        self.writes.clear();
+        self.buffer.clear();
+    }
 }
-impl<T: PartialEq + Clone> WriteQueue<T> {
+impl<T: PartialEq + Clone + Copy> WriteQueue<T> {
     // note: HOT CODE!
     #[inline(always)]
     pub fn push(&mut self, target: LinkTarget<T>, state: bool) {
-        // If there is already a queued write to the same target,
-        // this write must eventually execute after it,
-        // by making sure it's delay is greater than the already queued event.
-        let new_delay = self.rand.next_range(0u64..2) as u8;
-
-        // TODO try to remove the loop
-        for write in &mut self.writes {
-            if write.target == target {
-                write.state = state;
-                write.delay += new_delay;
-                // A target should only ever have up to 1 write targeting it,
-                // so returning is fine.
-                return;
-            }
-        }
         self.writes.push(Write {
             target,
             state,
-            delay: new_delay,
+            delay: self.rand.next_range(0u64..8) as u8,
         });
     }
 
     #[inline(always)]
     pub fn push_buffer(&mut self, target: LinkTarget<T>, state: bool) {
+        for write in &mut self.buffer {
+            if write.0 == target {
+                write.1 = state;
+                return;
+            }
+        }
+
         self.buffer.push((target, state));
     }
 
     #[inline(always)]
     pub fn store_buffer(&mut self) {
         for idx in 0..self.buffer.len() {
-            let (target, state) = self.buffer[idx].clone();
+            let (target, state) = self.buffer[idx];
             self.push(target, state);
         }
         self.buffer.clear();
@@ -208,7 +205,7 @@ impl DeviceData {
 pub struct Device {
     pub pos: Pos2,
     pub data: DeviceData,
-    pub links: Vec<Vec<LinkTarget<u64>>>,
+    pub links: Vec<Vec<Link>>,
     pub name: String,
     pub color: Color32,
 
@@ -266,7 +263,7 @@ impl Io {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Input {
     pub io: Io,
-    pub links: Vec<DeviceInput<u64>>,
+    pub links: Vec<Link>,
 }
 impl Input {
     pub fn new(io: Io) -> Self {
@@ -322,8 +319,8 @@ impl Scene {
 
                     let mut changed_outputs = device.data.set_input(input, write.state);
                     while let Some((output, state)) = changed_outputs.next() {
-                        for target in device.links[output].clone() {
-                            self.write_queue.push_buffer(target, state);
+                        for link in &device.links[output] {
+                            self.write_queue.push_buffer(link.target, state);
                         }
                     }
                 }
@@ -340,8 +337,8 @@ impl Scene {
 
             let mut changed_outputs = chip.update();
             while let Some((output, state)) = changed_outputs.next() {
-                for target in device.links[output].clone() {
-                    self.write_queue.push_buffer(target, state);
+                for link in &device.links[output] {
+                    self.write_queue.push_buffer(link.target, state);
                 }
             }
         }
@@ -363,8 +360,8 @@ impl Scene {
             if device.data.output().get(output_idx) == false {
                 continue;
             }
-            for target in &device.links[output_idx] {
-                self.write_queue.push(target.clone(), false);
+            for link in &device.links[output_idx] {
+                self.write_queue.push(link.target, false);
             }
         }
         self.devices.remove(&id).unwrap();
@@ -375,8 +372,8 @@ impl Scene {
 
         let mut changed_outputs = device.data.set_input(input, state);
         while let Some((output, state)) = changed_outputs.next() {
-            for target in device.links[output].clone() {
-                self.write_queue.push(target.clone(), state);
+            for link in &device.links[output] {
+                self.write_queue.push(link.target, state);
             }
         }
     }
@@ -545,8 +542,8 @@ impl Scene {
     pub fn set_input(&mut self, input: u64, state: bool) {
         let Some(input) = self.inputs.get_mut(&input) else { return };
         input.io.state = state;
-        for target in input.links.clone() {
-            self.write_queue.push(target.wrap(), state);
+        for link in &input.links {
+            self.write_queue.push(link.target, state);
         }
     }
     pub fn drag_input(&mut self, id: u64, drag: Vec2) {
@@ -623,18 +620,20 @@ impl Scene {
     }
 }
 impl Scene {
-    pub fn add_link(&mut self, link: NewLink<u64>) {
-        match link {
-            NewLink::InputToDeviceInput(input, target) => {
-                let input = self.inputs.get_mut(&input).unwrap();
-                input.links.push(target.clone());
+    pub fn add_link(&mut self, start: LinkStart<u64>, link: Link) {
+        self.remove_link_to(link.target);
+        let target = link.target;
+        match start {
+            LinkStart::Input(id) => {
+                let input = self.inputs.get_mut(&id).unwrap();
+                input.links.push(link);
 
-                self.write_queue.push(target.wrap(), input.io.state);
+                self.write_queue.push(target, input.io.state);
             }
-            NewLink::DeviceOutputTo(device, output, target) => {
-                let device = self.devices.get_mut(&device).unwrap();
-                device.links[output].push(target.clone());
-                let state = device.data.output().get(output);
+            LinkStart::DeviceOutput(id, idx) => {
+                let device = self.devices.get_mut(&id).unwrap();
+                device.links[idx].push(link);
+                let state = device.data.output().get(idx);
 
                 self.write_queue.push(target, state);
             }
@@ -665,7 +664,7 @@ impl Scene {
     pub fn remove_link_to(&mut self, target: LinkTarget<u64>) -> bool {
         for (_, input) in &mut self.inputs {
             for link_idx in 0..input.links.len() {
-                if input.links[link_idx].wrap() == target {
+                if input.links[link_idx].target == target {
                     input.links.remove(link_idx);
                     return true;
                 }
@@ -674,7 +673,7 @@ impl Scene {
         for (_, device) in &mut self.devices {
             for links in &mut device.links {
                 for link_idx in 0..links.len() {
-                    if links[link_idx] == target {
+                    if links[link_idx].target == target {
                         links.remove(link_idx);
                         return true;
                     }
