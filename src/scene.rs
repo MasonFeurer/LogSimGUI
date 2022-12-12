@@ -11,6 +11,8 @@ pub use chip::Chip;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SceneItem {
+    InputCol,
+    OutputCol,
     Device(u64),
     DeviceInput(u64, usize),
     DeviceOutput(u64, usize),

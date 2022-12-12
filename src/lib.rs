@@ -19,13 +19,13 @@ pub use preset::{DevicePreset, PresetData, Presets};
 pub use scene::Scene;
 pub use settings::Settings;
 
-const ON_V: u8 = 255;
-const OFF_V: u8 = 150;
+const ON_V: u8 = 200;
+const OFF_V: u8 = 100;
 
 #[rustfmt::skip]
 pub const LINK_COLORS: &[[Color32; 2]] = &[
+	[Color32::from_rgb(OFF_V, 0, 0), Color32::from_rgb(ON_V, 0, 0)],
     [Color32::from_rgb(OFF_V, OFF_V, OFF_V), Color32::from_rgb(ON_V, ON_V, ON_V)],
-    [Color32::from_rgb(OFF_V, 0, 0), Color32::from_rgb(ON_V, 0, 0)],
     [Color32::from_rgb(0, OFF_V, 0), Color32::from_rgb(0, ON_V, 0)],
     [Color32::from_rgb(0, 0, OFF_V), Color32::from_rgb(0, 0, ON_V)],
     [Color32::from_rgb(OFF_V, OFF_V, 0), Color32::from_rgb(ON_V, ON_V, 0)],
@@ -78,10 +78,10 @@ pub struct Link {
     pub color: usize,
 }
 impl Link {
-    pub fn new(target: LinkTarget<u64>, color: usize) -> Self {
+    pub fn new(target: LinkTarget<u64>, color: usize, anchors: Vec<Pos2>) -> Self {
         Self {
             target,
-            anchors: Vec::new(),
+            anchors,
             color,
         }
     }

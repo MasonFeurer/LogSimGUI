@@ -76,6 +76,7 @@ pub struct CreateLinks {
     starts: Vec<LinkStart<u64>>,
     color: usize,
     rand_colors: bool,
+    anchors: Vec<Pos2>,
 }
 impl CreateLinks {
     fn new() -> Self {
@@ -83,6 +84,7 @@ impl CreateLinks {
             starts: Vec::new(),
             color: rand_link_color(),
             rand_colors: false,
+            anchors: Vec::new(),
         }
     }
 
@@ -96,6 +98,7 @@ impl CreateLinks {
             } else {
                 0
             };
+            self.anchors.clear();
         }
         self.starts.insert(0, start);
     }
@@ -233,7 +236,9 @@ impl App {
     }
     pub fn finish_link(&mut self, target: LinkTarget<u64>) -> bool {
         if let Some((start, color)) = self.create_links.take() {
-            self.scene.add_link(start, Link::new(target, color));
+            let anchors = self.create_links.anchors.clone();
+            self.scene
+                .add_link(start, Link::new(target, color, anchors));
             return true;
         }
         false
@@ -545,6 +550,7 @@ impl App {
                 color,
                 pos,
                 input.pointer_pos,
+                &self.create_links.anchors,
             );
         }
         if input.pressed(Key::Escape) {
@@ -781,6 +787,12 @@ impl App {
     }
 
     pub fn scene_input(&mut self, input: &FrameInput) {
+        if let AppItem::SceneBackground = input.prev_hovered {
+            if input.pressed_prim {
+                let pos = self.view.unmap_pos(input.pointer_pos);
+                self.create_links.anchors.push(pos);
+            }
+        }
         let AppItem::SceneItem(item) = input.prev_hovered else {
     		return;
     	};
@@ -892,7 +904,19 @@ impl App {
                     self.scene.write_queue.push(target, false);
                 }
             }
-        }
+            SceneItem::InputCol => {
+                if input.clicked_prim {
+                    let y = graphics::unmap_io_y(&self.view, input.pointer_pos.y);
+                    self.scene.add_input(y);
+                }
+            }
+            SceneItem::OutputCol => {
+                if input.clicked_prim {
+                    let y = graphics::unmap_io_y(&self.view, input.pointer_pos.y);
+                    self.scene.add_output(y);
+                }
+            }
+        };
     }
 
     pub fn show_selected_devices(&mut self, g: &mut Graphics, input: &FrameInput) {
@@ -1016,23 +1040,6 @@ impl App {
         if zoom_delta != 1.0 {
             let pos = input.pointer_pos - self.scene.rect.min;
             self.view.zoom(zoom_delta, pos.to_pos2());
-        }
-
-        // --- Handle placing inputs & outputs
-        if input.pressed_prim && input.prev_hovered == AppItem::SceneBackground {
-            let col_w = self.settings.scene_pin_col_w * self.view.scale();
-            let output_col_x = self.scene.rect.max.x - col_w;
-            let input_col_x = self.scene.rect.min.x + col_w;
-            let x = input.pointer_pos.x;
-            let y = graphics::unmap_io_y(&self.view, input.pointer_pos.y);
-
-            if x < input_col_x {
-                self.scene.add_input(y);
-                output.void_click = true;
-            } else if x > output_col_x {
-                self.scene.add_output(y);
-                output.void_click = true;
-            }
         }
 
         // --- Handle placing presets ---

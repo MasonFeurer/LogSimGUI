@@ -331,19 +331,27 @@ pub fn show_link(
     color: usize,
     from: Pos2,
     to: Pos2,
+    anchors: &[Pos2],
 ) -> bool {
     let width = s.link_width * v.scale();
     let color = LINK_COLORS[color][state as usize];
+    let stroke = ShowStroke {
+        color: [color; 2],
+        width: [width, width + 2.0],
+    };
 
-    let hovered = g.line(
-        from,
-        to,
-        s.link_width,
-        ShowStroke {
-            color: [color; 2],
-            width: [width, width + 2.0],
-        },
-    );
+    let mut hovered = false;
+
+    let mut points = vec![from];
+    points.extend(anchors.iter().map(|pos| v.map_pos(*pos)));
+    points.push(to);
+
+    for idx in 1..points.len() {
+        let (from, to) = (points[idx - 1], points[idx]);
+        if g.line(from, to, width, stroke) {
+            hovered = true;
+        }
+    }
     hovered
 }
 pub fn show_pin<T: Into<RichText>>(
@@ -551,7 +559,16 @@ pub fn show_scene(
                 	dead_links.push((LinkStart::DeviceOutput(*device_id, output_idx), link_idx));
                 	continue;
                 };
-                let hovered = show_link(g, s, view, state, link.color, link_start, target_pos);
+                let hovered = show_link(
+                    g,
+                    s,
+                    view,
+                    state,
+                    link.color,
+                    link_start,
+                    target_pos,
+                    &link.anchors,
+                );
                 if hovered && interact_w_link {
                     result = Some(SceneItem::DeviceOutputLink(
                         *device_id, output_idx, link_idx,
@@ -581,6 +598,7 @@ pub fn show_scene(
                 link.color,
                 link_start,
                 target_pos,
+                &link.anchors,
             );
             if hovered && interact_w_link {
                 result = Some(SceneItem::InputLink(*input_id, link_idx));
@@ -610,8 +628,12 @@ pub fn show_scene(
     let output_rect = Rect::from_min_size(rect.max - col_size, col_size);
     let color = [g.ui.visuals().faint_bg_color; 2];
 
-    g.rect(input_rect, 0.0, color, None);
-    g.rect(output_rect, 0.0, color, None);
+    if g.rect(input_rect, 0.0, color, None) {
+        result = Some(SceneItem::InputCol);
+    }
+    if g.rect(output_rect, 0.0, color, None) {
+        result = Some(SceneItem::OutputCol);
+    }
 
     let show_io_bulb = move |g: &mut Graphics, state: bool, x: f32, y: f32| -> bool {
         g.circle(
