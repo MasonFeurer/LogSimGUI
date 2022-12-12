@@ -86,30 +86,31 @@ impl<T: PartialEq + Clone + Copy> WriteQueue<T> {
     // note: HOT CODE!
     #[inline(always)]
     pub fn push(&mut self, target: LinkTarget<T>, state: bool) {
+        self.buffer.push((target, state));
+    }
+
+    #[inline(always)] // only one call site
+    fn push_raw(&mut self, target: LinkTarget<T>, state: bool) {
+        let new_delay = self.rand.next_range(0u64..3) as u8;
+        for write in &mut self.writes {
+            if write.target == target {
+                write.state = state;
+                write.delay += new_delay;
+                return;
+            }
+        }
         self.writes.push(Write {
             target,
             state,
-            delay: self.rand.next_range(0u64..8) as u8,
+            delay: new_delay,
         });
     }
 
     #[inline(always)]
-    pub fn push_buffer(&mut self, target: LinkTarget<T>, state: bool) {
-        for write in &mut self.buffer {
-            if write.0 == target {
-                write.1 = state;
-                return;
-            }
-        }
-
-        self.buffer.push((target, state));
-    }
-
-    #[inline(always)]
-    pub fn store_buffer(&mut self) {
+    pub fn flush(&mut self) {
         for idx in 0..self.buffer.len() {
             let (target, state) = self.buffer[idx];
-            self.push(target, state);
+            self.push_raw(target, state);
         }
         self.buffer.clear();
     }
@@ -117,21 +118,23 @@ impl<T: PartialEq + Clone + Copy> WriteQueue<T> {
     // note: HOT CODE!
     #[inline(always)]
     pub fn next(&mut self) -> Option<Write<T>> {
-        let mut result = None;
         for idx in 0..self.writes.len() {
-            let write = &mut self.writes[idx];
-            if write.delay == 0 {
-                result = Some(idx);
-            } else {
-                write.delay -= 1;
+            if self.writes[idx].delay == 0 {
+                let write = self.writes[idx].clone();
+                self.writes.remove(idx);
+                return Some(write);
             }
         }
-        if let Some(idx) = result {
-            let result = Some(self.writes[idx].clone());
-            self.writes.remove(idx);
-            return result;
-        }
         None
+    }
+
+    // Should call after next() returns None, and before flush(),
+    // because it expects all writes to have a delay > 0
+    #[inline(always)]
+    pub fn update(&mut self) {
+        for write in &mut self.writes {
+            write.delay -= 1;
+        }
     }
 }
 
@@ -320,7 +323,7 @@ impl Scene {
                     let mut changed_outputs = device.data.set_input(input, write.state);
                     while let Some((output, state)) = changed_outputs.next() {
                         for link in &device.links[output] {
-                            self.write_queue.push_buffer(link.target, state);
+                            self.write_queue.push(link.target, state);
                         }
                     }
                 }
@@ -338,11 +341,12 @@ impl Scene {
             let mut changed_outputs = chip.update();
             while let Some((output, state)) = changed_outputs.next() {
                 for link in &device.links[output] {
-                    self.write_queue.push_buffer(link.target, state);
+                    self.write_queue.push(link.target, state);
                 }
             }
         }
-        self.write_queue.store_buffer();
+        self.write_queue.update();
+        self.write_queue.flush();
     }
 }
 impl Scene {

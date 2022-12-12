@@ -160,7 +160,7 @@ pub fn save_presets(presets: &mut Presets) -> Result<(), Err> {
             }
             Change::Removed(name) => {
                 path.push(format!("{}.data", name));
-                let _ = fs::remove_file(&path);
+                _ = fs::remove_file(&path);
                 path.pop();
             }
         }
@@ -183,7 +183,6 @@ pub fn read_dir<P: AsRef<Path>, F: Fn(&PathBuf) -> bool>(
     }
     Ok(results)
 }
-// returns the Device preset and if it is dirty (should be re-saved)
 pub fn load_preset<P: AsRef<Path>>(path: &P, presets: &mut Presets) -> Result<(), Err> {
     let add_ctx = |err: Err| err.context("Failed to load preset");
 

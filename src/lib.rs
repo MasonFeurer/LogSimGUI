@@ -10,7 +10,7 @@ pub mod preset_placer;
 pub mod scene;
 pub mod settings;
 
-use egui::{Pos2, Rect, Vec2};
+use egui::{Color32, Pos2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
 pub use app::{App, AppItem, CreateApp};
@@ -18,6 +18,33 @@ pub use integration::{FrameInput, FrameOutput, Keybind};
 pub use preset::{DevicePreset, PresetData, Presets};
 pub use scene::Scene;
 pub use settings::Settings;
+
+const ON_V: u8 = 255;
+const OFF_V: u8 = 150;
+
+#[rustfmt::skip]
+pub const LINK_COLORS: &[[Color32; 2]] = &[
+    [Color32::from_rgb(OFF_V, OFF_V, OFF_V), Color32::from_rgb(ON_V, ON_V, ON_V)],
+    [Color32::from_rgb(OFF_V, 0, 0), Color32::from_rgb(ON_V, 0, 0)],
+    [Color32::from_rgb(0, OFF_V, 0), Color32::from_rgb(0, ON_V, 0)],
+    [Color32::from_rgb(0, 0, OFF_V), Color32::from_rgb(0, 0, ON_V)],
+    [Color32::from_rgb(OFF_V, OFF_V, 0), Color32::from_rgb(ON_V, ON_V, 0)],
+    [Color32::from_rgb(OFF_V, 0, OFF_V), Color32::from_rgb(ON_V, 0, ON_V)],
+    [Color32::from_rgb(0, OFF_V, OFF_V), Color32::from_rgb(0, ON_V, ON_V)],
+];
+const NUM_LINK_COLORS: usize = LINK_COLORS.len();
+
+pub fn rand_link_color() -> usize {
+    let mut bytes = [0];
+    _ = getrandom::getrandom(&mut bytes);
+    let [byte] = bytes;
+    // byte is in 0..=255
+    // color should be in 0..=NUM_LINK_COLORS-1
+
+    let norm = byte as f32 / 255.0;
+    assert!(norm >= 0.0 && norm <= 1.0);
+    (norm * (NUM_LINK_COLORS) as f32) as usize
+}
 
 #[inline(always)]
 pub fn rand_id() -> u64 {
@@ -48,11 +75,15 @@ impl<T: Copy> DeviceInput<T> {
 pub struct Link {
     pub target: LinkTarget<u64>,
     pub anchors: Vec<Pos2>,
+    pub color: usize,
 }
 impl Link {
-    pub fn new(target: LinkTarget<u64>) -> Self {
-        let anchors = Vec::new();
-        Self { target, anchors }
+    pub fn new(target: LinkTarget<u64>, color: usize) -> Self {
+        Self {
+            target,
+            anchors: Vec::new(),
+            color,
+        }
     }
 }
 

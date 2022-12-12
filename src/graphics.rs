@@ -34,13 +34,13 @@ pub fn spread_y<T, F: Fn(f32) -> T>(min: f32, max: f32, count: usize, f: F) -> V
 
 pub fn device_output_links(s: &Settings, v: &View, device: Rect, count: usize) -> Vec<Pos2> {
     spread_y(device.min.y, device.max.y, count, |y| Pos2 {
-        x: device.max.x + s.device_pin_size.x * v.scale(),
+        x: device.max.x + s.device_pin_size.x * v.scale() * 0.5,
         y,
     })
 }
 pub fn device_input_links(s: &Settings, v: &View, device: Rect, count: usize) -> Vec<Pos2> {
     spread_y(device.min.y, device.max.y, count, |y| Pos2 {
-        x: device.min.x - s.device_pin_size.x * v.scale(),
+        x: device.min.x - s.device_pin_size.x * v.scale() * 0.5,
         y,
     })
 }
@@ -78,8 +78,9 @@ pub fn link_target_pos(
     match target {
         LinkTarget::Output(id) => {
             let y = scene_output_view_y(scene, id, v)?;
-            let x =
-                scene.rect.max.x - s.scene_pin_col_w * v.scale() - s.scene_pin_size.x * v.scale();
+            let x = scene.rect.max.x
+                - s.scene_pin_col_w * v.scale()
+                - s.scene_pin_size.x * v.scale() * 0.5;
             Some(Pos2 { x, y })
         }
         LinkTarget::DeviceInput(device_id, input) => {
@@ -98,8 +99,9 @@ pub fn link_start_pos(
     match start {
         LinkStart::Input(id) => {
             let y = scene_input_view_y(scene, id, v)?;
-            let x =
-                scene.rect.min.x + s.scene_pin_col_w * v.scale() + s.scene_pin_size.x * v.scale();
+            let x = scene.rect.min.x
+                + s.scene_pin_col_w * v.scale()
+                + s.scene_pin_size.x * v.scale() * 0.5;
             Some(Pos2 { x, y })
         }
         LinkStart::DeviceOutput(device_id, output) => {
@@ -321,16 +323,28 @@ impl<'a> Graphics<'a> {
     }
 }
 
-pub fn show_link(g: &mut Graphics, s: &Settings, state: bool, from: Pos2, to: Pos2) -> bool {
-    g.line(
+pub fn show_link(
+    g: &mut Graphics,
+    s: &Settings,
+    v: &View,
+    state: bool,
+    color: usize,
+    from: Pos2,
+    to: Pos2,
+) -> bool {
+    let width = s.link_width * v.scale();
+    let color = LINK_COLORS[color][state as usize];
+
+    let hovered = g.line(
         from,
         to,
         s.link_width,
         ShowStroke {
-            color: [s.link_color(state); 2],
-            width: [s.link_width, s.link_width + 2.0],
+            color: [color; 2],
+            width: [width, width + 2.0],
         },
-    )
+    );
+    hovered
 }
 pub fn show_pin<T: Into<RichText>>(
     g: &mut Graphics,
@@ -515,21 +529,6 @@ pub fn show_scene(
     let mut result: Option<SceneItem> = None;
     let rect = scene.rect;
 
-    // --- Show devices ---
-    for (device_id, device) in &scene.devices {
-        let show_id = show_device_ids.then(|| *device_id);
-        let device_rs = show_device(g, s, view, device, show_id);
-
-        if let Some(device_item) = device_rs {
-            let scene_item = match device_item {
-                DeviceItem::Device => SceneItem::Device(*device_id),
-                DeviceItem::Input(input) => SceneItem::DeviceInput(*device_id, input),
-                DeviceItem::Output(output) => SceneItem::DeviceOutput(*device_id, output),
-            };
-            result = Some(scene_item);
-        }
-    }
-
     // --- Show links from devices ---
     // If we are hovering a device input or output pin,
     // that should take priority for interaction
@@ -552,7 +551,7 @@ pub fn show_scene(
                 	dead_links.push((LinkStart::DeviceOutput(*device_id, output_idx), link_idx));
                 	continue;
                 };
-                let hovered = show_link(g, s, state, link_start, target_pos);
+                let hovered = show_link(g, s, view, state, link.color, link_start, target_pos);
                 if hovered && interact_w_link {
                     result = Some(SceneItem::DeviceOutputLink(
                         *device_id, output_idx, link_idx,
@@ -574,10 +573,33 @@ pub fn show_scene(
             	dead_links.push((LinkStart::Input(*input_id), link_idx));
             	continue;
             };
-            let hovered = show_link(g, s, input.io.state, link_start, target_pos);
+            let hovered = show_link(
+                g,
+                s,
+                view,
+                input.io.state,
+                link.color,
+                link_start,
+                target_pos,
+            );
             if hovered && interact_w_link {
                 result = Some(SceneItem::InputLink(*input_id, link_idx));
             }
+        }
+    }
+
+    // --- Show devices ---
+    for (device_id, device) in &scene.devices {
+        let show_id = show_device_ids.then(|| *device_id);
+        let device_rs = show_device(g, s, view, device, show_id);
+
+        if let Some(device_item) = device_rs {
+            let scene_item = match device_item {
+                DeviceItem::Device => SceneItem::Device(*device_id),
+                DeviceItem::Input(input) => SceneItem::DeviceInput(*device_id, input),
+                DeviceItem::Output(output) => SceneItem::DeviceOutput(*device_id, output),
+            };
+            result = Some(scene_item);
         }
     }
 

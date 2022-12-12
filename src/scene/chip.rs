@@ -66,7 +66,8 @@ impl Chip {
         while let Some(write) = self.write_queue.next() {
             self.set_link_target(write.target, write.state);
         }
-        self.write_queue.store_buffer();
+        self.write_queue.update();
+        self.write_queue.flush();
         ChangedOutputs::new(prev_output, self.output)
     }
 
@@ -99,7 +100,7 @@ impl Chip {
         let mut changed_outputs = device.data.set_input(input, state);
         while let Some((output, state)) = changed_outputs.next() {
             for target in &device.links[output] {
-                self.write_queue.push_buffer(*target, state);
+                self.write_queue.push(*target, state);
             }
         }
     }

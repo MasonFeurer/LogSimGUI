@@ -51,7 +51,6 @@ impl DevOptions {
 
         ui.label(format!("drag: {:?}", input.drag));
         ui.label(format!("selected devices: {:?}", app.selected_devices));
-        ui.label(format!("link starts: {:?}", app.link_starts));
         ui.label(format!("edit popup: {:?}", app.edit_popup));
 
         ui.add_space(10.0);

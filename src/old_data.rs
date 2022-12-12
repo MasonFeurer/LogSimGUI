@@ -18,7 +18,7 @@ impl OldInput {
         let links = self
             .links
             .iter()
-            .map(|device_input| Link::new(device_input.wrap()))
+            .map(|device_input| Link::new(device_input.wrap(), 0))
             .collect();
         Input {
             links,
@@ -67,7 +67,12 @@ impl OldDevice {
         let links = self
             .links
             .into_iter()
-            .map(|links| links.into_iter().map(|target| Link::new(target)).collect())
+            .map(|links| {
+                links
+                    .into_iter()
+                    .map(|target| Link::new(target, 0))
+                    .collect()
+            })
             .collect();
         Device {
             pos: self.pos,

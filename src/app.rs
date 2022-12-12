@@ -72,6 +72,38 @@ impl AppItem {
     }
 }
 
+pub struct CreateLinks {
+    starts: Vec<LinkStart<u64>>,
+    color: usize,
+    rand_colors: bool,
+}
+impl CreateLinks {
+    fn new() -> Self {
+        Self {
+            starts: Vec::new(),
+            color: rand_link_color(),
+            rand_colors: false,
+        }
+    }
+
+    fn push(&mut self, start: LinkStart<u64>) {
+        if self.starts.contains(&start) {
+            return;
+        }
+        if self.starts.is_empty() {
+            self.color = if self.rand_colors {
+                rand_link_color()
+            } else {
+                0
+            };
+        }
+        self.starts.insert(0, start);
+    }
+    fn take(&mut self) -> Option<(LinkStart<u64>, usize)> {
+        self.starts.pop().map(|start| (start, self.color))
+    }
+}
+
 pub struct CreateApp {
     pub settings: Settings,
     pub presets: Presets,
@@ -99,8 +131,7 @@ pub struct App {
     presets_menu_sel: Option<String>,
     /// If we right click on some scene item, shows a popup
     pub edit_popup: Option<SceneItem>,
-    /// If we started placing some links
-    pub link_starts: Vec<LinkStart<u64>>,
+    pub create_links: CreateLinks,
     /// The config for creating a new preset from the scene
     create_preset: CreatePreset,
     /// If there was an error creating a preset
@@ -135,7 +166,7 @@ impl App {
             context_menu_pos: Pos2::ZERO,
             presets_menu_sel: None,
             edit_popup: None,
-            link_starts: Vec::new(),
+            create_links: CreateLinks::new(),
             create_preset: CreatePreset::default(),
             create_err: None,
             preset_placer: PresetPlacer::default(),
@@ -200,21 +231,12 @@ impl App {
         self.create_preset.save_scene = true;
         self.scene = scene;
     }
-    pub fn start_link(&mut self, start: LinkStart<u64>) {
-        for start2 in &self.link_starts {
-            if *start2 == start {
-                return;
-            }
-        }
-        self.link_starts.insert(0, start);
-    }
     pub fn finish_link(&mut self, target: LinkTarget<u64>) -> bool {
-        let Some(start) = self.link_starts.last().cloned() else {
-        	return false;
-        };
-        self.scene.add_link(start, Link::new(target));
-        self.link_starts.pop().unwrap();
-        true
+        if let Some((start, color)) = self.create_links.take() {
+            self.scene.add_link(start, Link::new(target, color));
+            return true;
+        }
+        false
     }
 
     // -----------------------------------------------------------
@@ -487,6 +509,9 @@ impl App {
         ui.label("Auto link: ").on_hover_text(AUTO_LINK_MSG);
         ui.checkbox(&mut self.auto_link, "")
             .on_hover_text(self.keybind_toggle_auto_link.show());
+
+        ui.label("Colorful links: ");
+        ui.checkbox(&mut self.create_links.rand_colors, "");
     }
 
     pub fn central_panel(&mut self, ui: &mut Ui, input: &FrameInput, output: &mut FrameOutput) {
@@ -502,19 +527,28 @@ impl App {
         self.show_selected_devices(&mut g, input);
 
         // --- show links to pointer ---
-        for idx in (0..self.link_starts.len()).rev() {
-            let link_start = self.link_starts[idx].clone();
+        for idx in (0..self.create_links.starts.len()).rev() {
+            let link_start = self.create_links.starts[idx].clone();
             let Some(state) = self.scene.link_start_state(link_start) else {
-            	self.link_starts.remove(idx);
+            	self.create_links.starts.remove(idx);
             	continue;
             };
             use graphics::{link_start_pos, show_link};
 
+            let color = self.create_links.color;
             let pos = link_start_pos(&self.settings, &self.view, &self.scene, link_start).unwrap();
-            show_link(&mut g, &self.settings, state, pos, input.pointer_pos);
+            show_link(
+                &mut g,
+                &self.settings,
+                &self.view,
+                state,
+                color,
+                pos,
+                input.pointer_pos,
+            );
         }
         if input.pressed(Key::Escape) {
-            self.link_starts.clear();
+            self.create_links.starts.clear();
             self.held_presets.clear();
         }
 
@@ -716,10 +750,7 @@ impl App {
 
     pub fn show_scene(&mut self, g: &mut Graphics) -> Option<SceneItem> {
         let mut dead_links = Vec::new();
-        let output_link_err = match self.link_starts.last() {
-            Some(LinkStart::Input(_)) => true,
-            _ => false,
-        };
+        let output_link_err = false;
         let hovered = graphics::show_scene(
             g,
             &self.settings,
@@ -792,7 +823,7 @@ impl App {
             }
             SceneItem::InputPin(id) => {
                 if input.pressed_prim || try_link {
-                    self.start_link(LinkStart::Input(id));
+                    self.create_links.push(LinkStart::Input(id));
                 }
             }
             SceneItem::InputLink(input_id, link_idx) => {
@@ -844,7 +875,8 @@ impl App {
             }
             SceneItem::DeviceOutput(device, output) => {
                 if input.pressed_prim || try_link {
-                    self.start_link(LinkStart::DeviceOutput(device, output));
+                    self.create_links
+                        .push(LinkStart::DeviceOutput(device, output));
                 }
                 if input.pressed(Key::Backspace) {
                     let device = self.scene.devices.get_mut(&device).unwrap();
