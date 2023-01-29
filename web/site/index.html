@@ -38,7 +38,7 @@
 <body>
 	<p id="loading_msg"></p>
 	<canvas id="app"></canvas>
-	<script src="log_sim_gui_web.js" type="text/javascript"></script>
+	<script src="logsim_web.js" type="text/javascript"></script>
 	<script>
 		const LOADING_MSG = "Downloading WASM";
 		const LOADING_ERR_MSG = "Failed to download WASM (try Shift + Ctrl(⌘) + R)";
@@ -63,7 +63,7 @@
 		
 		update_loading_msg();
 		
-		wasm_bindgen("./log_sim_gui_web_bg.wasm").then(on_wasm_loaded).catch(on_wasm_err);
+		wasm_bindgen("./logsim_web_bg.wasm").then(on_wasm_loaded).catch(on_wasm_err);
 		function on_wasm_err(err) {
 			stop_loading(false);
 			console.error(err);

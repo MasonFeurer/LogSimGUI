@@ -1,5 +1,5 @@
 [package]
-name = "log-sim-gui"
+name = "logsim"
 version = "0.1.0"
 edition = "2021"
 
@@ -12,5 +12,5 @@ getrandom = "^0.2.8"
 tinyrand = "0.5"
 hashbrown = { version = "0.13.1", features = ["serde"] }
 
-egui = { version = "0.20", features = ["serde"] }
+egui = { version = "0.20.1", features = ["serde"] }
 epaint = { version = "0.20", features = ["serde"] }

@@ -72,5 +72,25 @@
 
 ## Latest (On GitHub)
 - Improved simulation performance
-- Added "version" setting
-- Removed "dev_options" setting
+- Changed settings
+  - removed "version"
+  - removed "high_contrast"
+  - removed "preset_placer_pos"
+  - replaced "dark_mode" with "theme"
+  - added "board_color"
+  - added "board_io_col_color"
+  - added "auto_link"
+  - added "colorful_wires"
+  - renamed "dev_options" -> "debug"
+  - renamed "scene_pin_col_w" -> "board_io_col_w"
+  - renamed "scene_pin_size" -> "board_io_pin_size"
+  - renamed "pin_color" -> "pin_colors"
+  - renamed "link_color" -> "link_colors"
+  - renamed "device_name_font_size" -> "device_name_size"
+- Removed "Save scene" and "Combinational" option for chip creation
+- Removed "Clear" button
+- Removed the edit popup for board IO and board IO groups
+- Removed preset placer
+- Added name popup for board IO
+- Overhauled visuals for UI menu's and board
+- The inputs and outputs columns are not longer locked to the left and right side

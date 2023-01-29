@@ -1,23 +1,45 @@
 #![feature(let_chains)]
 
 pub mod app;
-pub mod dev;
+pub mod board;
 pub mod graphics;
-pub mod integration;
+pub mod input;
 pub mod old_data;
-pub mod preset;
-pub mod preset_placer;
-pub mod scene;
+pub mod presets;
 pub mod settings;
+pub mod ui;
 
-use egui::{Color32, Pos2, Rect, Vec2};
+use crate::presets::Library;
+use egui::{Color32, Pos2};
 use serde::{Deserialize, Serialize};
 
-pub use app::{App, AppItem, CreateApp};
-pub use integration::{FrameInput, FrameOutput, Keybind};
-pub use preset::{DevicePreset, PresetData, Presets};
-pub use scene::Scene;
-pub use settings::Settings;
+pub struct IntegrationInfo {
+    pub name: String,
+    pub native: bool,
+}
+
+#[non_exhaustive]
+pub enum OutEvent {
+    None,
+    Quit,
+    ToggleFullscreen,
+
+    ImportPresets,
+    RevealConfigDir,
+
+    LoadBoard,
+    LoadLibrary,
+    LoadSettings,
+    SaveBoard,
+    SaveLibrary,
+    SaveSettings,
+    SaveAll,
+}
+impl Default for OutEvent {
+    fn default() -> Self {
+        Self::None
+    }
+}
 
 const ON_V: u8 = 200;
 const OFF_V: u8 = 100;

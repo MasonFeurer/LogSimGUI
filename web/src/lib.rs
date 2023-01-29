@@ -1,7 +1,9 @@
-use eframe::egui::{Context, Key, Pos2};
+use eframe::egui::Context;
 use eframe::wasm_bindgen::{self, prelude::*};
-use log_sim_gui::integration::FrameInput;
-use log_sim_gui::*;
+use logsim::app::App;
+use logsim::board::Board;
+use logsim::presets::{DevicePreset, Library};
+use logsim::settings::Settings;
 use rfd::AsyncFileDialog;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
@@ -26,15 +28,31 @@ pub async fn main_web(canvas_id: &str) {
     .expect("failed to start web app");
 }
 
+pub fn get_os() -> Option<&'static str> {
+    let mut os_name = "Unknown";
+    let navigator = web_sys::window()?.navigator();
+    let app_version = navigator.app_version().ok()?;
+
+    if app_version.contains("Win") {
+        os_name = "windows";
+    }
+    if app_version.contains("Mac") {
+        os_name = "macos";
+    }
+    if app_version.contains("X11") {
+        os_name = "unix";
+    }
+    if app_version.contains("Linux") {
+        os_name = "linux";
+    }
+    Some(os_name)
+}
+
 macro_rules! console_log {
     ($($t:tt)*) => {{
     	let string = format_args!($($t)*).to_string();
     	web_sys::console::log_1(&string.into())
     }};
-}
-
-fn save(_app: &mut App) {
-    console_log!("saving is not implemented for web");
 }
 
 type MergePresets = (Arc<SyncSender<DevicePreset>>, Receiver<DevicePreset>);
@@ -45,23 +63,18 @@ fn merge_presets() -> &'static MergePresets {
 
 struct WebApp {
     app: App,
-    input: FrameInput,
-    hovered: AppItem,
 }
 impl WebApp {
     fn new() -> Self {
-        let create_app = CreateApp {
-            settings: Settings::default(),
-            presets: Presets::default(),
-            scene: Scene::new(),
-            keybind_toggle_auto_link: Keybind::Control(Key::L),
-            keybind_step_sim: Keybind::Control(Key::S),
-            keybind_duplicate_devices: Keybind::Control(Key::D),
+        let info = logsim::IntegrationInfo {
+            name: format!("Web"),
+            native: false,
         };
+        let settings = Settings::default();
+        let library = Library::default();
+        let board = Board::default();
         Self {
-            app: App::new(create_app),
-            input: FrameInput::default(),
-            hovered: AppItem::default(),
+            app: App::new(info, settings, library, board),
         }
     }
 }
@@ -69,52 +82,46 @@ impl eframe::App for WebApp {
     fn update(&mut self, ctx: &Context, _win_frame: &mut eframe::Frame) {
         // merge presets if needed
         if let Ok(preset) = merge_presets().1.try_recv() {
-            self.app.presets.merge(&[preset]);
+            self.app.library.add_preset(preset, true);
         }
 
         // rest of update
-        self.input.update(ctx, self.hovered);
-        let output = self.app.update(ctx, &self.input);
+        let event = self.app.update(ctx);
 
-        self.hovered = output.hovered;
-        self.input.hovered_changed = self.input.prev_hovered != output.hovered;
-        self.input.prev_hovered = output.hovered;
-        if output.void_click {
-            self.input.press_pos = Pos2::ZERO;
-        }
+        match event {
+            logsim::OutEvent::None => {}
+            logsim::OutEvent::Quit => {}
+            logsim::OutEvent::ToggleFullscreen => {}
 
-        if output.save {
-            save(&mut self.app);
-        }
-        if output.reveal_persist_dir {
-            console_log!("opening the config folder is not available in web");
-        }
-        if output.import_presets {
-            let sender = Arc::clone(&merge_presets().0);
-            let future = async move {
-                let entries = AsyncFileDialog::new().pick_files().await;
-                for entry in entries.unwrap_or(Vec::new()) {
-                    let bytes = entry.read().await;
-                    let Ok(preset) = bincode::deserialize::<DevicePreset>(&bytes) else {
-	                	console_log!("failed to parse preset {:?}", entry.file_name());
-	                	continue;
-	                };
-                    sender.send(preset).unwrap();
-                }
-            };
-            wasm_bindgen_futures::spawn_local(future);
-        }
-        if output.load_presets {
-            console_log!("loading presets is not available in web");
-        }
-        if output.load_settings {
-            console_log!("loading settings is not avaliable in web");
+            logsim::OutEvent::ImportPresets => {
+                let sender = Arc::clone(&merge_presets().0);
+                let future = async move {
+                    let entries = AsyncFileDialog::new().pick_files().await;
+                    for entry in entries.unwrap_or(Vec::new()) {
+                        let bytes = entry.read().await;
+                        let Ok(preset) = bincode::deserialize::<DevicePreset>(&bytes) else {
+                        console_log!("failed to parse preset {:?}", entry.file_name());
+                        continue;
+                    };
+                        sender.send(preset).unwrap();
+                    }
+                };
+                wasm_bindgen_futures::spawn_local(future);
+            }
+            logsim::OutEvent::RevealConfigDir => {}
+
+            logsim::OutEvent::LoadBoard => {}
+            logsim::OutEvent::LoadLibrary => {}
+            logsim::OutEvent::LoadSettings => {}
+
+            logsim::OutEvent::SaveBoard => {}
+            logsim::OutEvent::SaveLibrary => {}
+            logsim::OutEvent::SaveSettings => {}
+
+            logsim::OutEvent::SaveAll => {}
+            _ => {}
         }
 
         ctx.request_repaint_after(Duration::from_millis(1000 / 60));
-    }
-
-    fn on_exit(&mut self, _ctx: Option<&eframe::glow::Context>) {
-        self.app.on_exit();
     }
 }

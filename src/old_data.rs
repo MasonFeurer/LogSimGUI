@@ -1,5 +1,5 @@
-use crate::preset::{DevicePreset, PresetData, PresetSource};
-use crate::scene::{Device, DeviceData, Group, Input, Io, Output, Scene, WriteQueue};
+use crate::board::{Board, Device, DeviceData, Group, Input, Io, Output, WriteQueue};
+use crate::presets::{DevicePreset, PresetData, PresetSource};
 use crate::{DeviceInput, Link, LinkTarget};
 use egui::{Color32, Pos2, Rect};
 use hashbrown::HashMap;
@@ -78,10 +78,7 @@ impl OldDevice {
             pos: self.pos,
             data: self.data,
             links,
-            name: self.name,
-            color: self.color,
-            input_names: self.input_names,
-            output_names: self.output_names,
+            preset: String::from("unknown"),
         }
     }
 }
@@ -99,7 +96,7 @@ pub struct OldScene {
     pub output_groups: HashMap<u64, Group>,
 }
 impl OldScene {
-    pub fn update(self) -> Scene {
+    pub fn update(self) -> Board {
         let inputs = self
             .inputs
             .into_iter()
@@ -115,7 +112,7 @@ impl OldScene {
             .into_iter()
             .map(|(id, device)| (id, device.update()))
             .collect();
-        Scene {
+        Board {
             rect: self.rect,
             write_queue: self.write_queue,
             inputs,
@@ -157,8 +154,8 @@ impl OldPresetSource {
     pub fn update(self) -> PresetSource {
         match self {
             Self::Default => PresetSource::Default,
-            Self::Scene(None) => PresetSource::Scene(None),
-            Self::Scene(Some(scene)) => PresetSource::Scene(Some(scene.update())),
+            Self::Scene(None) => panic!("no scene source"),
+            Self::Scene(Some(scene)) => PresetSource::Board(scene.update()),
         }
     }
 }

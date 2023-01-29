@@ -1,13 +1,14 @@
 [package]
-name = "log-sim-gui-native"
+name = "logsim-native"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-log-sim-gui = { path = ".." }
+logsim = { path = ".." }
 serde = { version = "^1", features = ["serde_derive"] }
 eframe = { version = "0.20", features = ["serde"] }
 ron = "0.8"
 bincode = "1.3.3"
 dirs = "4.0"
 rfd = "0.10"
+futures = { version = "0.3.25", features = ["thread-pool", "executor"] }
