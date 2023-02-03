@@ -78,15 +78,13 @@ impl AppAction {
 pub struct CreateLinks {
     pub starts: Vec<LinkStart<u64>>,
     pub color: usize,
-    pub rand_colors: bool,
     pub anchors: Vec<Pos2>,
 }
 impl CreateLinks {
     fn new() -> Self {
         Self {
             starts: Vec::new(),
-            color: rand_link_color(),
-            rand_colors: false,
+            color: 0,
             anchors: Vec::new(),
         }
     }
@@ -96,11 +94,7 @@ impl CreateLinks {
             return;
         }
         if self.starts.is_empty() {
-            self.color = if self.rand_colors {
-                rand_link_color()
-            } else {
-                0
-            };
+            self.color = 0;
             self.anchors.clear();
         }
         self.starts.insert(0, start);
@@ -325,7 +319,7 @@ impl App {
     }
 
     pub fn clone_selected_devices(&mut self, pointer_pos: Pos2) {
-        let mut selection_min = Pos2::new(f32::INFINITY, f32::INFINITY);
+        let mut selection_min = pos2(f32::INFINITY, f32::INFINITY);
         let mut devices = Vec::with_capacity(self.selected_devices.len());
         for device_id in &self.selected_devices {
             let device = self.board.devices.get(device_id).unwrap();
@@ -558,7 +552,7 @@ impl App {
             std::mem::swap(&mut held_presets, &mut self.held_presets);
 
             let t = self.sim_menu.view.create_inv_transform();
-            let mut pos = t * (self.input.pointer_pos + Vec2::new(0.0, 30.0));
+            let mut pos = t * (self.input.pointer_pos + vec2(0.0, 30.0));
 
             for name in held_presets {
                 self.place_preset(&name, pos);

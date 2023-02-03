@@ -1,7 +1,7 @@
 use crate::presets::{ChipPreset, DevicePreset, PresetData};
 use crate::settings::Settings;
 use crate::*;
-use egui::{Rect, Vec2};
+use egui::{pos2, Pos2, Rect, Vec2};
 use hashbrown::HashMap;
 use tinyrand::{RandRange, Seeded, StdRand};
 
@@ -274,8 +274,8 @@ impl Board {
     pub fn new() -> Self {
         Self {
             rect: Rect {
-                min: Pos2::new(0.0, 0.0),
-                max: Pos2::new(600.0, 400.0),
+                min: pos2(0.0, 0.0),
+                max: pos2(600.0, 400.0),
             },
             write_queue: WriteQueue::empty(),
 

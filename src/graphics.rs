@@ -5,6 +5,21 @@ use crate::settings::Settings;
 use crate::*;
 use egui::*;
 
+const ON_V: u8 = 200;
+const OFF_V: u8 = 100;
+
+#[rustfmt::skip]
+pub const LINK_COLORS: &[[Color32; 2]] = &[
+    [Color32::from_rgb(OFF_V, 0, 0), Color32::from_rgb(ON_V, 0, 0)],
+    [Color32::from_rgb(OFF_V, OFF_V, OFF_V), Color32::from_rgb(ON_V, ON_V, ON_V)],
+    [Color32::from_rgb(0, OFF_V, 0), Color32::from_rgb(0, ON_V, 0)],
+    [Color32::from_rgb(0, 0, OFF_V), Color32::from_rgb(0, 0, ON_V)],
+    [Color32::from_rgb(OFF_V, OFF_V, 0), Color32::from_rgb(ON_V, ON_V, 0)],
+    [Color32::from_rgb(OFF_V, 0, OFF_V), Color32::from_rgb(ON_V, 0, ON_V)],
+    [Color32::from_rgb(0, OFF_V, OFF_V), Color32::from_rgb(0, ON_V, ON_V)],
+];
+pub const NUM_LINK_COLORS: usize = LINK_COLORS.len();
+
 pub struct Spread {
     pub count: usize,
     pub counter: usize,
@@ -48,12 +63,12 @@ pub struct VerticalSpread(pub f32, pub Spread);
 impl Iterator for VerticalSpread {
     type Item = Pos2;
     fn next(&mut self) -> Option<Self::Item> {
-        self.1.next().map(|y| Pos2::new(self.0, y))
+        self.1.next().map(|y| pos2(self.0, y))
     }
 
     /// note: Doesn't update the iterator
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.1.nth(n).map(|y| Pos2::new(self.0, y))
+        self.1.nth(n).map(|y| pos2(self.0, y))
     }
 }
 
@@ -157,8 +172,8 @@ pub fn project_point_onto_line(p: Pos2, line: (Pos2, Pos2)) -> Pos2 {
     let (v1, v2) = line;
 
     // get dot product of e1, e2
-    let e1 = Pos2::new(v2.x - v1.x, v2.y - v1.y);
-    let e2 = Pos2::new(p.x - v1.x, p.y - v1.y);
+    let e1 = pos2(v2.x - v1.x, v2.y - v1.y);
+    let e2 = pos2(p.x - v1.x, p.y - v1.y);
     let dot = e1.x * e2.x + e1.y * e2.y;
 
     // get squared length of e1
@@ -166,7 +181,7 @@ pub fn project_point_onto_line(p: Pos2, line: (Pos2, Pos2)) -> Pos2 {
 
     let result_x = v1.x + (dot * e1.x) / len_sq;
     let result_y = v1.y + (dot * e1.y) / len_sq;
-    Pos2::new(result_x, result_y)
+    pos2(result_x, result_y)
 }
 pub fn line_contains_point(line: (Pos2, Pos2), width: f32, point: Pos2) -> bool {
     let max_dist_sq = width * width;
@@ -353,7 +368,7 @@ pub fn calc_device_size(num_inputs: usize, num_outputs: usize, min_pin_spacing: 
     let num_io = num_inputs.max(num_outputs);
     let h = (num_io + 1) as f32 * min_pin_spacing;
     let w = h.max(70.0);
-    Vec2::new(w, h)
+    vec2(w, h)
 }
 pub fn device_size(device: &board::Device, settings: &Settings) -> Vec2 {
     calc_device_size(
@@ -488,7 +503,7 @@ pub fn show_device(
     // --- Show ID ---
     if let Some(id) = device.show_id {
         g.text(
-            pos + Vec2::new(size.x * 0.5, -10.0),
+            pos + vec2(size.x * 0.5, -10.0),
             10.0,
             &format!("{}", id),
             Color32::from_gray(120),
@@ -618,7 +633,7 @@ pub fn show_board(
     // --- Show input and output columns ---
     let margin = Vec2::splat(5.0);
     let col_w = settings.board_io_col_w;
-    let col_size = Vec2::new(col_w, rect.height()) - margin * 2.0;
+    let col_size = vec2(col_w, rect.height()) - margin * 2.0;
     let input_rect = Rect::from_min_size(rect.min + margin, col_size);
     let output_rect = Rect::from_min_size(rect.max - margin - col_size, col_size);
     let color = [settings.board_io_col_color; 2];
@@ -632,7 +647,7 @@ pub fn show_board(
 
     let show_io_bulb = move |g: &mut Graphics, state: bool, x: f32, y: f32| -> bool {
         g.circle(
-            Pos2::new(x, y),
+            pos2(x, y),
             col_w * 0.5,
             [settings.pin_color(state); 2],
             BULB_STROKE,
@@ -645,8 +660,8 @@ pub fn show_board(
             color: [settings.board_io_col_color; 2],
             width: [4.0; 2],
         };
-        g.line(Pos2::new(x0, y0), Pos2::new(x0, y1), 0.0, stroke);
-        g.line(Pos2::new(x1, y0), Pos2::new(x1, y1), 0.0, stroke);
+        g.line(pos2(x0, y0), pos2(x0, y1), 0.0, stroke);
+        g.line(pos2(x1, y0), pos2(x1, y1), 0.0, stroke);
     };
 
     // --- Show input pins ---
@@ -655,7 +670,7 @@ pub fn show_board(
         let input = &input.io;
         let (x, y) = (rect.min.x + col_w * 0.5, input.y_pos);
 
-        let pin_pos = Pos2::new(rect.min.x + col_w + pin_size * 0.5, y);
+        let pin_pos = pos2(rect.min.x + col_w + pin_size * 0.5, y);
         let color = settings.pin_color(input.state);
         if show_pin(g, pin_pos, pin_size, color, &input.name) {
             result = Some(BoardItem::InputPin(*input_id));
@@ -674,7 +689,7 @@ pub fn show_board(
         let text = group.display_value(group.field(board, IoSel::Input));
         let top_member_y = board.inputs.get(&group.members[0]).unwrap().io.y_pos;
         g.text(
-            Pos2::new(center, top_member_y - settings.board_io_col_w * 0.5),
+            pos2(center, top_member_y - settings.board_io_col_w * 0.5),
             10.0,
             &text,
             Color32::WHITE,
@@ -687,7 +702,7 @@ pub fn show_board(
         let output = &output.io;
         let (x, y) = (rect.max.x - col_w * 0.5, output.y_pos);
 
-        let pin_pos = Pos2::new(rect.max.x - col_w - pin_size * 0.5, y);
+        let pin_pos = pos2(rect.max.x - col_w - pin_size * 0.5, y);
         let color = settings.pin_color(output.state);
         if show_pin(g, pin_pos, pin_size, color, &output.name) {
             result = Some(BoardItem::OutputPin(*output_id));
@@ -741,7 +756,7 @@ pub fn show_held_presets(
 ) {
     if presets.len() > 1 {
         g.text(
-            pos + Vec2::new(30.0, 0.0),
+            pos + vec2(30.0, 0.0),
             20.0,
             &format!("{}", presets.len()),
             Color32::WHITE,

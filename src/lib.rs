@@ -10,7 +10,6 @@ pub mod settings;
 pub mod ui;
 
 use crate::presets::Library;
-use egui::{Color32, Pos2};
 use serde::{Deserialize, Serialize};
 
 pub struct IntegrationInfo {
@@ -41,33 +40,6 @@ impl Default for OutEvent {
     }
 }
 
-const ON_V: u8 = 200;
-const OFF_V: u8 = 100;
-
-#[rustfmt::skip]
-pub const LINK_COLORS: &[[Color32; 2]] = &[
-	[Color32::from_rgb(OFF_V, 0, 0), Color32::from_rgb(ON_V, 0, 0)],
-    [Color32::from_rgb(OFF_V, OFF_V, OFF_V), Color32::from_rgb(ON_V, ON_V, ON_V)],
-    [Color32::from_rgb(0, OFF_V, 0), Color32::from_rgb(0, ON_V, 0)],
-    [Color32::from_rgb(0, 0, OFF_V), Color32::from_rgb(0, 0, ON_V)],
-    [Color32::from_rgb(OFF_V, OFF_V, 0), Color32::from_rgb(ON_V, ON_V, 0)],
-    [Color32::from_rgb(OFF_V, 0, OFF_V), Color32::from_rgb(ON_V, 0, ON_V)],
-    [Color32::from_rgb(0, OFF_V, OFF_V), Color32::from_rgb(0, ON_V, ON_V)],
-];
-const NUM_LINK_COLORS: usize = LINK_COLORS.len();
-
-pub fn rand_link_color() -> usize {
-    let mut bytes = [0];
-    _ = getrandom::getrandom(&mut bytes);
-    let [byte] = bytes;
-    // byte is in 0..=255
-    // color should be in 0..=NUM_LINK_COLORS-1
-
-    let norm = byte as f32 / 255.0;
-    assert!(norm >= 0.0 && norm <= 1.0);
-    (norm * (NUM_LINK_COLORS) as f32) as usize
-}
-
 #[inline(always)]
 pub fn rand_id() -> u64 {
     let mut bytes = [0; 8];
@@ -96,11 +68,11 @@ impl<T: Copy> DeviceInput<T> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Link {
     pub target: LinkTarget<u64>,
-    pub anchors: Vec<Pos2>,
+    pub anchors: Vec<egui::Pos2>,
     pub color: usize,
 }
 impl Link {
-    pub fn new(target: LinkTarget<u64>, color: usize, anchors: Vec<Pos2>) -> Self {
+    pub fn new(target: LinkTarget<u64>, color: usize, anchors: Vec<egui::Pos2>) -> Self {
         Self {
             target,
             anchors,

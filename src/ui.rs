@@ -299,7 +299,7 @@ impl ChipPlacer {
     ) -> (bool, AppAction) {
         let mut action = AppAction::default();
 
-        let size = Vec2::new(200.0, 20.0);
+        let size = vec2(200.0, 20.0);
         let rect = Rect::from_min_size(pos, size);
 
         let mut field_changed = self.first_frame;
@@ -311,7 +311,7 @@ impl ChipPlacer {
         let frame_rs = Frame::menu(ui.style()).show(&mut ui, |ui| {
             ui.horizontal(|ui| {
                 ui.style_mut().spacing.text_edit_width = 100.0;
-                ui.style_mut().spacing.item_spacing = Vec2::new(5.0, 0.0);
+                ui.style_mut().spacing.item_spacing = vec2(5.0, 0.0);
                 ui.style_mut().spacing.button_padding = Vec2::ZERO;
 
                 let rs = ui.add(TextEdit::singleline(&mut self.field).hint_text("Search library"));
