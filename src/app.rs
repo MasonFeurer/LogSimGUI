@@ -467,20 +467,12 @@ impl App {
                 }
 
                 if let Some(popup) = self.name_popup.clone() {
-                    if popup.is_dead() {
-                        self.name_popup = None;
-                    }
-
                     let t = self.sim_menu.view.create_transform();
 
-                    let rs = popup.show(ui, &self.board, self.settings.board_io_col_w, t);
-                    self.name_popup.as_mut().map(|e| e.update());
-                    if rs.hovered {
-                        self.name_popup.as_mut().map(|e| e.persist());
+                    self.name_popup =
+                        popup.show(ui, &mut self.board, self.settings.board_io_col_w, t);
+                    if matches!(&self.name_popup, Some(e) if e.hovered) {
                         self.input.set_hovered(AppItem::NamePopup);
-                    }
-                    if rs.edit {
-                        println!("edit!");
                     }
                 }
             })

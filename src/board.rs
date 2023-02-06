@@ -204,7 +204,7 @@ impl Device {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum IoSel {
     Input,
     Output,

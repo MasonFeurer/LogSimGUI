@@ -1,5 +1,5 @@
 use crate::app::{App, AppAction, AppItem};
-use crate::board::{Board, BoardItem, DeviceData};
+use crate::board::{Board, BoardItem, DeviceData, IoSel};
 use crate::graphics::{Transform, View};
 use crate::input::Input;
 use crate::presets::{Library, PresetData, PresetSource};
@@ -364,33 +364,33 @@ pub struct NamePopupRs {
     pub edit: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum PinType {
-    Input,
-    Output,
-}
-
 const FADE_TIME: u32 = 50;
 
 #[derive(Clone, Debug)]
 pub struct NamePopup {
     pub timer: u32,
     pub id: u64,
-    pub ty: PinType,
+    pub edit: bool,
+    pub ty: IoSel,
+    pub hovered: bool,
 }
 impl NamePopup {
     pub fn input(id: u64) -> Self {
         Self {
             timer: FADE_TIME,
             id,
-            ty: PinType::Input,
+            edit: false,
+            ty: IoSel::Input,
+            hovered: false,
         }
     }
     pub fn output(id: u64) -> Self {
         Self {
             timer: FADE_TIME,
             id,
-            ty: PinType::Output,
+            edit: false,
+            ty: IoSel::Output,
+            hovered: false,
         }
     }
 
@@ -406,54 +406,103 @@ impl NamePopup {
         self.timer = FADE_TIME;
     }
 
-    pub fn show(self, ui: &mut Ui, board: &Board, col_w: f32, t: Transform) -> NamePopupRs {
-        let mut out = NamePopupRs::default();
-
-        let size = vec2(100.0, 50.0);
-        let (rect, mut name) = match self.ty {
-            PinType::Input => {
+    fn calc_pos(&self, size: Vec2, board: &Board, col_w: f32, t: Transform) -> Pos2 {
+        match self.ty {
+            IoSel::Input => {
                 let input = &board.inputs.get(&self.id).unwrap().io;
-                let pos = pos2(board.rect.left() + col_w, input.y_pos - t * (size.y * 0.5));
-                (Rect::from_min_size(t * pos, size), input.name.clone())
+                t * pos2(board.rect.left() + col_w, input.y_pos) - vec2(0.0, size.y * 0.5)
             }
-            PinType::Output => {
+            IoSel::Output => {
                 let output = &board.outputs.get(&self.id).unwrap().io;
-                let pos = pos2(
-                    board.rect.right() - col_w - size.x,
-                    output.y_pos - size.y * 0.5,
-                );
-                (Rect::from_min_size(t * pos, size), output.name.clone())
+                t * pos2(board.rect.right() - col_w, output.y_pos) - vec2(size.x, size.y * 0.5)
             }
-        };
-        if name.trim().is_empty() {
-            name = format!("no-name");
         }
+    }
+
+    fn show_editor(
+        mut self,
+        ui: &mut Ui,
+        board: &mut Board,
+        col_w: f32,
+        t: Transform,
+    ) -> Option<Self> {
+        let size = vec2(100.0, 30.0);
+        let pos = self.calc_pos(size, board, col_w, t);
+
+        let mut ui = ui.child_ui(Rect::from_min_size(pos, size), ui.layout().clone());
+
+        let frame = Frame::popup(ui.style());
+        let rs = frame.show(&mut ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                let io = board.mut_io(self.ty, self.id).unwrap();
+
+                let rs = ui.text_edit_singleline(&mut io.name);
+                let result = rs.lost_focus();
+                rs.request_focus();
+                result
+            })
+            .inner
+        });
+        self.hovered = rs.response.hovered();
+        if rs.inner {
+            return None;
+        }
+        // let rs = rs.response.interact(Sense::click());
+        Some(self)
+    }
+    fn show_name(mut self, ui: &mut Ui, board: &Board, col_w: f32, t: Transform) -> Option<Self> {
+        if self.timer == 0 {
+            return None;
+        }
+        self.timer -= 1;
+
+        let size = vec2(100.0, 30.0);
+        let pos = self.calc_pos(size, board, col_w, t);
+        let name = {
+            let mut temp = match self.ty {
+                IoSel::Input => board.inputs.get(&self.id).unwrap().io.name.clone(),
+                IoSel::Output => board.outputs.get(&self.id).unwrap().io.name.clone(),
+            };
+            if temp.trim().is_empty() {
+                temp = format!("no-name");
+            }
+            temp
+        };
 
         let factor = self.timer as f32 / FADE_TIME as f32;
         let fade = |color: &mut Color32| {
             *color = color.linear_multiply(factor);
         };
 
-        let mut ui = ui.child_ui(rect, ui.layout().clone());
+        let mut ui = ui.child_ui(Rect::from_min_size(pos, size), ui.layout().clone());
 
         let frame = Frame::popup(ui.style()).multiply_with_opacity(factor);
         let rs = frame.show(&mut ui, |ui| {
             let vis = &mut ui.style_mut().visuals.widgets;
             fade(&mut vis.noninteractive.fg_stroke.color);
-            ui.label(name);
+
+            ui.horizontal_centered(|ui| {
+                ui.label(&name);
+            });
         });
         let rs = rs.response.interact(Sense::click());
-
-        if rs.hovered() {
-            out.hovered = true;
+        self.hovered = rs.hovered();
+        if self.hovered {
+            self.persist();
         }
         if rs.clicked() {
-            out.edit = true;
+            self.edit = true;
         }
-        out
+        Some(self)
     }
 
-    pub fn show_editor(self, _ui: &mut Ui) {}
+    pub fn show(self, ui: &mut Ui, board: &mut Board, col_w: f32, t: Transform) -> Option<Self> {
+        if self.edit {
+            self.show_editor(ui, board, col_w, t)
+        } else {
+            self.show_name(ui, board, col_w, t)
+        }
+    }
 }
 
 pub fn debug_ui(ui: &mut Ui, app: &mut App) {
