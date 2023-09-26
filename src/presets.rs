@@ -283,8 +283,11 @@ impl Library {
             a_ml.cmp(&b_ml).reverse()
         });
         // Remove all results that have a match level of 0 (meaning they don't match at all)
-        while let Some(last) = results.last() && str_match_level(last, field) == 0 {
-        	results.pop();
+        while let Some(last) = results.last() {
+            if str_match_level(last, field) != 0 {
+                break;
+            }
+            results.pop();
         }
         results
     }
